@@ -41,6 +41,8 @@ int main(int argc, char* argv[]) {
     program.add_argument("--csv").help("csv result file").default_value(std::string(""));
     program.add_argument("--dataset_info").help("only output dataset-info to csv file").default_value(false).implicit_value(true);
     program.add_argument("--early_stop").help("early stop").default_value(false).implicit_value(true);
+    program.add_argument("--simple").help("simple version").default_value(false).implicit_value(true);
+    program.add_argument("--node").help("number of worker nodes").default_value(0ul).action([](const std::string& value) -> size_t { return std::stoul(value); });
 
     try {
         program.parse_args(argc, argv);
@@ -73,7 +75,9 @@ int main(int argc, char* argv[]) {
     size_t nlist = program.get<size_t>("nlist");
     bool verbose = program.get<bool>("verbose");
     bool early_stop = program.get<bool>("early_stop");
-
+    bool simple_version = program.get<bool>("simple");
+    size_t nodeCount = program.get<size_t>("node");
+    std::cout << BLUE << nodeCount << RESET << std::endl;
     if (early_stop && (ratios[0] != 1 || ratios.size() != 1)) {
         throw std::invalid_argument("early_stop is only allowed when ratios is 1.0");
     }
@@ -94,12 +98,14 @@ int main(int argc, char* argv[]) {
     std::string query_path = std::format("{}/{}/origin/{}_query.{}", benchmarks_path, dataset, dataset, input_format);
     std::string groundtruth_path = std::format("{}/{}/result/groundtruth_{}.{}", benchmarks_path, dataset, k, output_format);
     std::string log_path;
+    std::string log_path_simple;
     std::string tmp_csv_path = program.get<std::string>("csv");
     if (tmp_csv_path.length()) {
         log_path = tmp_csv_path;
     } else {
         if(!run_faiss){
             log_path = std::format("{}/{}/result/log.csv", benchmarks_path, dataset);
+            log_path_simple = std::format("{}/{}/result/log_simple.csv", benchmarks_path, dataset);
         }else{
             log_path = std::format("{}/{}/result/log_faiss.csv", benchmarks_path, dataset);
         }
@@ -109,10 +115,12 @@ int main(int argc, char* argv[]) {
     //     throw std::invalid_argument("run_faiss && train_only is not allowed, run_faiss will not train at all.");
     // }
 
+    //initialize base set
     size_t nb, d;
     std::unique_ptr<float[]> base = nullptr;
     std::tie(nb, d) = loadXvecsInfo(base_path);
 
+    // 不用管
     if (program.get<bool>("dataset_info")) {
         auto [nq, _] = loadXvecsInfo(query_path);
         std::ofstream ofs;
@@ -126,6 +134,8 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // init nlist, nprobe
+    // sift10k, nb = 10000, nlist = 100
     if (nlist == 0) {
         nlist = static_cast<size_t>(std::sqrt(nb));
     }
@@ -172,11 +182,14 @@ int main(int argc, char* argv[]) {
     std::string faiss_index_path = get_faiss_index_path();
     prepareDirectory(faiss_index_path);
 
+    //init query set
     auto [query, nq, _] = loadXvecs(query_path);
 
+    //init groundtruth
     std::unique_ptr<idx_t[]> ground_truth_I = std::make_unique<idx_t[]>(k * nq);
     std::unique_ptr<float[]> ground_truth_D = std::make_unique<float[]>(k * nq);
 
+    //init faiss_time file
     std::string faiss_time_path = std::format("{}/{}/result/faiss_result_nlist_{}.txt", benchmarks_path, dataset, nlist);
     std::vector<double> faiss_time(nprobes.size(), 0.0);
     std::ifstream faiss_time_input(faiss_time_path);
@@ -196,9 +209,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
+
     faiss::IndexFlatL2 quantizer(d);
     std::unique_ptr<faiss::IndexIVFFlat> index_faiss = std::make_unique<faiss::IndexIVFFlat>(&quantizer, d, nlist);
 
+    //train faiss and add base set to index_faiss
+    //write to index file
     auto train_load_faiss = [&]() {
         if (!std::filesystem::exists(faiss_index_path)) {
             Stopwatch warch_faiss;
@@ -229,6 +245,7 @@ int main(int argc, char* argv[]) {
         }
     };
 
+    //init groundtruth
     if (!std::filesystem::exists(groundtruth_path)) {
         double faiss_groundtruth_time = 0.0;
         if (verbose) {
@@ -242,6 +259,7 @@ int main(int argc, char* argv[]) {
         }
         index_faiss->nprobe = nlist;
         Stopwatch stopwatch;
+        //init ground_truth
         index_faiss->search(nq, query.get(), k, ground_truth_D.get(), ground_truth_I.get());
         faiss_groundtruth_time = stopwatch.elapsedSeconds();
         writeResultsToFile(ground_truth_I.get(), ground_truth_D.get(), nq, k, groundtruth_path);
@@ -261,6 +279,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    //run_faiss train log_faiss.csv
     if (run_faiss) {
         if (verbose) {
             std::cout << std::format("Running Faiss") << std::endl;
@@ -300,8 +319,8 @@ int main(int argc, char* argv[]) {
     }
 
     Index index;
-
     if (std::filesystem::exists(index_path) && cache) {
+        //直接使用已有的index文件，省去了train
         if (verbose) {
             std::cout << std::format("Loading index from {}", index_path) << std::endl;
         }
@@ -310,11 +329,21 @@ int main(int argc, char* argv[]) {
             std::cout << std::format("Index loaded") << std::endl;
         }
     } else {
+        // Index train, save index file
         std::tie(base, nb, d) = loadXvecs(base_path);
         nlist = static_cast<size_t>(std::sqrt(nb));
         index = Index(d, nlist, 0, metric, added_opt_levels, OPT_ALL, sub_nlist, sub_nprobe, verbose);
         index.train(nb, base.get());
-        index.add(nb, base.get());
+        if(simple_version) {
+            index.add_simple(nb, base.get());
+            if(nodeCount > 0) {
+
+            // index.distribute();
+            }
+        } 
+        else 
+            index.add(nb, base.get());
+        
         if (verbose) {
             std::cout << std::format("Index trained") << std::endl;
         }
@@ -327,7 +356,42 @@ int main(int argc, char* argv[]) {
     if (train_only) {
         return 0;
     }
-
+    auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, bool simpleVersion) {
+        // std::string simple = simpleVersion ? "simple" : "original";
+        // std::string output_path = std::format("{}/{}/result/result_nlist_{}_nprobe_{}_opt_{}_k_{}_ratio_{}_{}.{}",
+        //                                               benchmarks_path, dataset, nlist, nprobe, static_cast<int>(opt_level), k, ratio, output_format, simple);
+        // result stored in distance , labels
+        std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
+        std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
+        if (loop > 1) {
+            index.search(nq, query.get(), k, distances.get(), labels.get(), ratio);
+        }
+        Stopwatch stopwatch;
+        Stats stats;
+        for (size_t j = 0; j < loop; j++) {
+            stats = index.search(nq, query.get(), k, distances.get(), labels.get(), ratio);
+        }
+        float recall = calculate_recall(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
+        float r2 = calculate_r2(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
+        double search_time = stopwatch.elapsedSeconds() / loop;
+        stats.simi_ratio = ratio;
+        stats.nlist = nlist;
+        stats.nprobe = nprobe;
+        stats.query_time = search_time;
+        stats.faiss_query_time = f_time;
+        stats.opt_level = opt_level;
+        stats.recall = recall;
+        stats.r2 = r2;
+        stats.print();
+        if(simpleVersion)
+            stats.toCsv(log_path_simple, true, dataset);
+        else
+            stats.toCsv(log_path, true, dataset);
+        if (recall == 1) {
+            early_stop_flag = true;
+        }
+    };
+    // search with different nprobe ,Opt level ,ratio
     for (size_t i = 0; i < nprobes.size(); i++) {
         size_t nprobe = nprobes[i];
         double f_time = faiss_time[i];
@@ -336,34 +400,8 @@ int main(int argc, char* argv[]) {
         for (const OptLevel& opt_level : opt_levels) {
             index.opt_level = opt_level;
             for (float ratio : ratios) {
-                std::string output_path = std::format("{}/{}/result/result_nlist_{}_nprobe_{}_opt_{}_k_{}_ratio_{}.{}",
-                                                      benchmarks_path, dataset, nlist, nprobe, static_cast<int>(opt_level), k, ratio, output_format);
-                std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
-                std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
-                if (loop > 1) {
-                    index.search(nq, query.get(), k, distances.get(), labels.get(), ratio);
-                }
-                Stopwatch stopwatch;
-                Stats stats;
-                for (size_t j = 0; j < loop; j++) {
-                    stats = index.search(nq, query.get(), k, distances.get(), labels.get(), ratio);
-                }
-                float recall = calculate_recall(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
-                float r2 = calculate_r2(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
-                double search_time = stopwatch.elapsedSeconds() / loop;
-                stats.simi_ratio = ratio;
-                stats.nlist = nlist;
-                stats.nprobe = nprobe;
-                stats.query_time = search_time;
-                stats.faiss_query_time = f_time;
-                stats.opt_level = opt_level;
-                stats.recall = recall;
-                stats.r2 = r2;
-                stats.print();
-                stats.toCsv(log_path, true, dataset);
-                if (recall == 1) {
-                    early_stop_flag = true;
-                }
+                doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
+                doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true);
             }
         }
         if (early_stop_flag) {

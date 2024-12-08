@@ -28,10 +28,11 @@ class Index {
 
     void single_thread_nearest_cluster_search(size_t n, const float* queries, float* distances, idx_t* labels);
     void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
-
+    void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
+    void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
     void add(size_t n, const float* codes);
-
-    Stats search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio = 1.0);
+    void add_simple(size_t n, const float* codes);
+    Stats search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio = 1.0, bool simpleVersion = false);
     void save_index(std::string path) const;
     void load_index(std::string path);
     void load_SPANN(std::string path);
@@ -56,9 +57,9 @@ class Index {
     bool verbose;
     EdgeDevice edge_device_enabled;
 
-    std::unique_ptr<IVF[]> lists;
-    std::unique_ptr<float[]> centroid_codes;
-    std::unique_ptr<idx_t[]> centroid_ids;
+    std::unique_ptr<IVF[]> lists; //id为index,IVF是一个聚类
+    std::unique_ptr<float[]> centroid_codes; //聚类中心向量
+    std::unique_ptr<idx_t[]> centroid_ids; //聚类中心id
 };
 
 }  // namespace tribase

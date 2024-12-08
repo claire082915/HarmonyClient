@@ -19,9 +19,12 @@ namespace tribase {
 
 Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel opt_level, size_t sub_k, size_t sub_nlist, size_t sub_nprobe, bool verbose, EdgeDevice edge_device_enabled)
     : d(d), nlist(nlist), nprobe(nprobe), metric(metric), opt_level(opt_level), sub_k(sub_k), sub_nlist(sub_nlist), sub_nprobe(sub_nprobe), verbose(verbose), edge_device_enabled(edge_device_enabled) {
+    //nlist个聚类，IVF是一个聚类里面的所有点
     lists = std::make_unique<IVF[]>(nlist);
+    //code是向量，nlist个向量，每个向量d维
     centroid_codes = std::make_unique<float[]>(nlist * d);
     centroid_ids = std::make_unique<idx_t[]>(nlist);
+    //centroid_ids初始化为0~nlist-1
     std::iota(centroid_ids.get(), centroid_ids.get() + nlist, 0);
 }
 
@@ -46,9 +49,11 @@ Index& Index::operator=(Index&& other) noexcept {
 void Index::train(size_t n, const float* codes, bool faiss, bool lite) {
     // 这里假设Clustering类已经定义好，并且有一个合适的构造函数和train方法
     auto tic1 = std::chrono::high_resolution_clock::now();
+    // 默认faiss = false. lite = false
     if (!faiss) {
         ClusteringParameters cp;
         cp.metric = this->metric;
+        // 20个iteration
         cp.niter = 20;                     // 或其他合适的值
         if (lite) {
             cp.niter = 2;
@@ -61,6 +66,7 @@ void Index::train(size_t n, const float* codes, bool faiss, bool lite) {
 
         this->centroid_codes.reset(clustering.get_centroids());
     } else {
+        //使用faiss库的train
         faiss::IndexFlatL2 quantizer(d);  // the other index
         faiss::IndexIVFFlat index(&quantizer, d, nlist);
         index.train(n, codes);
@@ -193,6 +199,101 @@ void Index::single_thread_nearest_cluster_search(size_t n, const float* queries,
     }
 }
 
+// void Index::add_lcx(size_t n, const float* codes) {
+
+// }
+void Index::add_simple(size_t n, const float* codes) {
+    // const std::string BLUE = "\033[1;34m"; // Blue text
+    // const std::string RESET = "\033[0m"; // Reset color
+    std::cout << BLUE << "You are using Simple version of add" << RESET << std::endl;
+    //把n个向量加到聚类中心里面，codes是向量
+    if (n == 0) {
+        return;
+    }
+    //向量到中心的距离，和向量对应聚类中心的id
+    std::unique_ptr<float[]> candicate2centroid = std::make_unique<float[]>(n);
+    std::unique_ptr<idx_t[]> listidcandicates = std::make_unique<idx_t[]>(n);
+    
+    init_result(metric, n, candicate2centroid.get(), listidcandicates.get());
+    size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), n);
+    size_t batch_size = n / nt; //一个线程分配多少向量
+    size_t extra = n % nt; //多余的向量数
+    // auto nearest_search_start = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for num_threads(nt)
+    for (size_t i = 0; i < nt; i++) {
+        size_t start, end;
+        if (i < extra) {
+            start = i * (batch_size + 1);
+            end = start + batch_size + 1;
+        } else {
+            start = i * batch_size + extra;
+            end = start + batch_size;
+        }
+        if (start < end) {
+            single_thread_nearest_cluster_search(end - start, codes + start * d, candicate2centroid.get() + start, listidcandicates.get() + start);
+        }
+    }
+    // auto nearest_search_end = std::chrono::high_resolution_clock::now();
+
+    // if(verbose){
+    //     std::cout << "nearest search elapsed: " << std::chrono::duration<double>(nearest_search_end - nearest_search_start).count() << "s" << std::endl;
+    // }
+
+    // auto sort_and_add_start = std::chrono::high_resolution_clock::now();
+    //每个聚类的向量数量
+    std::unique_ptr<size_t[]> list_sizes = std::make_unique<size_t[]>(nlist);
+    std::fill_n(list_sizes.get(), nlist, 0);
+
+    // TODO: parallelize this part ?
+    // 设置好list_sizes
+    for (size_t i = 0; i < n; i++) {
+        list_sizes[listidcandicates[i]]++;
+    }
+
+    // //一共加了多少个向量
+    // size_t total_add = 0;
+    // for (size_t i = 0; i < nlist; i++) {
+    //     total_add += list_sizes[i];
+    // }
+
+#pragma omp parallel for
+    for (size_t i = 0; i < nlist; i++) {
+        lists[i].reset(list_sizes[i], d, sub_k, added_opt_level);
+    }
+
+    std::fill_n(list_sizes.get(), nlist, 0);
+
+    //加到聚类中的顺序，从距离聚类中心最近的向量开始加
+    std::unique_ptr<size_t[]> add_order = std::make_unique<size_t[]>(n);
+    std::iota(add_order.get(), add_order.get() + n, 0);
+    // if (metric == MetricType::METRIC_L2) {
+    std::sort(add_order.get(), add_order.get() + n, [&](size_t i, size_t j) { return candicate2centroid[i] < candicate2centroid[j]; });
+    // } else {
+    //     std::sort(add_order.get(), add_order.get() + n, [&](size_t i, size_t j) { return candicate2centroid[i] > candicate2centroid[j]; });
+    // }
+
+#pragma omp parallel
+    {
+        int nt = omp_get_num_threads();
+        //当前线程的id
+        int tid = omp_get_thread_num();
+
+        for (size_t oi = 0; oi < n; oi++) {
+            size_t i = add_order[oi]; //当前要加的是第i个向量
+            size_t list_id = listidcandicates[i];  // assert > 0 ， 第i个向量要加到聚类list_id中
+            if (list_id % nt == tid) { //tid线程发现是自己负责的list_id
+                size_t list_size = list_sizes[list_id]; //当前聚类的向量数量
+                lists[list_id].candidate_id[list_size] = i; //把i加到对应的聚类中
+                // if ((opt_level & OptLevel::OPT_TRIANGLE) || (opt_level & OptLevel::OPT_SUBNN_IP)) {
+                //     lists[list_id].candidate2centroid[list_size] = candicate2centroid[i];
+                // }
+                std::copy_n(codes + i * d, d, lists[list_id].candidate_codes.get() + list_size * d); //拷贝第i个向量
+                list_sizes[list_id]++;
+            }
+        }
+    }
+}
+
 void Index::add(size_t n, const float* codes) {
     auto tic1 = std::chrono::high_resolution_clock::now();
     if (n == 0) {
@@ -207,9 +308,10 @@ void Index::add(size_t n, const float* codes) {
     std::unique_ptr<float[]> candicate2centroid = std::make_unique<float[]>(n);
     std::unique_ptr<idx_t[]> listidcandicates = std::make_unique<idx_t[]>(n);
     init_result(metric, n, candicate2centroid.get(), listidcandicates.get());
+
     size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), n);
-    size_t batch_size = n / nt;
-    size_t extra = n % nt;
+    size_t batch_size = n / nt; //一个线程分配多少向量
+    size_t extra = n % nt; //多余的向量数
     auto nearest_search_start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(nt)
     for (size_t i = 0; i < nt; i++) {
@@ -232,14 +334,17 @@ void Index::add(size_t n, const float* codes) {
     }
 
     auto sort_and_add_start = std::chrono::high_resolution_clock::now();
+    //每个聚类的向量数量
     std::unique_ptr<size_t[]> list_sizes = std::make_unique<size_t[]>(nlist);
     std::fill_n(list_sizes.get(), nlist, 0);
 
     // TODO: parallelize this part ?
+    // 设置好list_sizes
     for (size_t i = 0; i < n; i++) {
         list_sizes[listidcandicates[i]]++;
     }
 
+    //一共加了多少个向量
     size_t total_add = 0;
     for (size_t i = 0; i < nlist; i++) {
         total_add += list_sizes[i];
@@ -252,6 +357,7 @@ void Index::add(size_t n, const float* codes) {
 
     std::fill_n(list_sizes.get(), nlist, 0);
 
+    //加到聚类中的顺序，从距离聚类中心最近的向量开始加
     std::unique_ptr<size_t[]> add_order = std::make_unique<size_t[]>(n);
     std::iota(add_order.get(), add_order.get() + n, 0);
     if (metric == MetricType::METRIC_L2) {
@@ -263,18 +369,19 @@ void Index::add(size_t n, const float* codes) {
 #pragma omp parallel
     {
         int nt = omp_get_num_threads();
+        //当前线程的id
         int tid = omp_get_thread_num();
 
         for (size_t oi = 0; oi < n; oi++) {
-            size_t i = add_order[oi];
-            size_t list_id = listidcandicates[i];  // assert > 0
-            if (list_id % nt == tid) {
-                size_t list_size = list_sizes[list_id];
-                lists[list_id].candidate_id[list_size] = i;
+            size_t i = add_order[oi]; //当前要加的是第i个向量
+            size_t list_id = listidcandicates[i];  // assert > 0 ， 第i个向量要加到聚类list_id中
+            if (list_id % nt == tid) { //tid线程发现是自己负责的list_id
+                size_t list_size = list_sizes[list_id]; //当前聚类的向量数量
+                lists[list_id].candidate_id[list_size] = i; //把i加到对应的聚类中
                 if ((opt_level & OptLevel::OPT_TRIANGLE) || (opt_level & OptLevel::OPT_SUBNN_IP)) {
                     lists[list_id].candidate2centroid[list_size] = candicate2centroid[i];
                 }
-                std::copy_n(codes + i * d, d, lists[list_id].candidate_codes.get() + list_size * d);
+                std::copy_n(codes + i * d, d, lists[list_id].candidate_codes.get() + list_size * d); //拷贝第i个向量
                 list_sizes[list_id]++;
             }
         }
@@ -496,34 +603,97 @@ void Index::add(size_t n, const float* codes) {
         std::cout << std::format("add elapsed: {:.2f}s\n", std::chrono::duration<double>(tic2 - tic1).count());
     }
 }
+void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
 
-void Index::single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
-    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe);
-    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k);
+}
+void Index::single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
+    //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
 
-    std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe);
-    std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe);
-    init_result(metric, n * nprobe, centroid2queries.get(), listidqueries.get());
+    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe); //搜索最近的聚类中心
+    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k); //在聚类中心内部搜
 
-    float* simi = distances;
-    idx_t* idxi = labels;
-    float* centroids2query = centroid2queries.get();
-    idx_t* listids = listidqueries.get();
+    std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe); // n个查询向量到nprobe个聚类中心的距离
+    std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
+    init_result(metric, n * nprobe, centroid2queries.get(), listidqueries.get()); //优先队列，存储离n个查询向量最近的nprobe个聚类中心
+    
+    //下面四个向量都和i绑定，也就是和每一个查询绑定
+    float* disi = distances; //结果，查询向量最近的k个向量的距离
+    idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
+    float* centroids2query = centroid2queries.get(); //单个查询对应的距离
+    idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
 
     for (size_t i = 0; i < n; i++) {
+        //每一个i对应一个查询
         scaner_quantizer->set_query(queries + i * d);
         scaner->set_query(queries + i * d);
+        //获取最近的nprobe个聚类中心
         scaner_quantizer->lite_scan_codes(nlist,
                                           centroid_codes.get(),
                                           reinterpret_cast<const size_t*>(centroid_ids.get()),
-                                          centroids2query,
-                                          listids);
+                                          centroids2query, //ret
+                                          listids); //ret , 分别对应两个堆
         sort_result(metric, nprobe, centroids2query, listids);
 
         if (metric == MetricType::METRIC_L2) {
             for (size_t j = 0; j < nprobe; j++) {
+                //在第j个聚类中搜索所有点
+                //list代表聚类
                 IVF& list = lists[listids[j]];
+
+                //查询点到中心的距离
                 float centroid2query = centroids2query[j];
+                //聚类中的点的数量
+                size_t list_size = list.get_list_size();
+
+                size_t scan_begin = 0;
+                size_t scan_end = list_size;
+
+                scaner->lite_scan_codes(list_size,list.get_candidate_codes(), list.get_candidate_id(), disi, idxi);
+            }
+        } 
+        sort_result(metric, k, disi, idxi);
+        disi += k;
+        idxi += k;
+        centroids2query += nprobe;
+        listids += nprobe;
+    }
+}
+void Index::single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
+    //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
+    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe); //搜索最近的聚类中心
+    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k); //在聚类中心内部搜
+
+    std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe); // n个查询向量到nprobe个聚类中心的距离
+    std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
+    init_result(metric, n * nprobe, centroid2queries.get(), listidqueries.get()); //优先队列，存储离n个查询向量最近的nprobe个聚类中心
+
+    //下面四个向量都和i绑定，也就是和每一个查询绑定
+    float* simi = distances;
+    idx_t* idxi = labels;
+    float* centroids2query = centroid2queries.get(); //单个查询对应的距离
+    idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
+
+    for (size_t i = 0; i < n; i++) {
+        //每一个i对应一个查询
+        scaner_quantizer->set_query(queries + i * d);
+        scaner->set_query(queries + i * d);
+        //获取最近的nprobe个聚类中心
+        scaner_quantizer->lite_scan_codes(nlist,
+                                          centroid_codes.get(),
+                                          reinterpret_cast<const size_t*>(centroid_ids.get()),
+                                          centroids2query, //ret
+                                          listids); //ret , 分别对应两个堆
+        sort_result(metric, nprobe, centroids2query, listids);
+
+        if (metric == MetricType::METRIC_L2) {
+            for (size_t j = 0; j < nprobe; j++) {
+                //在第j个聚类中搜索所有点
+                //list代表聚类
+                IVF& list = lists[listids[j]];
+
+                //查询点到中心的距离
+                float centroid2query = centroids2query[j];
+                //聚类中的点的数量
                 size_t list_size = list.get_list_size();
 
                 std::unique_ptr<bool[]> if_skip = std::make_unique<bool[]>(list_size);
@@ -533,32 +703,32 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                 size_t scan_begin = 0;
                 size_t scan_end = list_size;
 
-                if (opt_level & OptLevel::OPT_TRIANGLE) {
-                    const float* sqrt_candidate2centroid = list.get_sqrt_candidate2centroid();
-                    const float* candidate2centroid = list.get_candidate2centroid();
-                    float sqrt_simi = ratio * sqrt(simi[0]);  // TODO:
-                    float sqrt_centroid2query = sqrt(centroid2query);
-                    for (size_t ii = 0; ii < list_size; ii++) {
-                        float tmp = sqrt_simi + sqrt_candidate2centroid[ii];
-                        if (tmp < sqrt_centroid2query) {
-                            skip_count++;
-                        } else {
-                            break;
-                        }
-                    }
+                // if (opt_level & OptLevel::OPT_TRIANGLE) {
+                //     const float* sqrt_candidate2centroid = list.get_sqrt_candidate2centroid();
+                //     const float* candidate2centroid = list.get_candidate2centroid();
+                //     float sqrt_simi = ratio * sqrt(simi[0]);  // TODO:
+                //     float sqrt_centroid2query = sqrt(centroid2query);
+                //     for (size_t ii = 0; ii < list_size; ii++) {
+                //         float tmp = sqrt_simi + sqrt_candidate2centroid[ii];
+                //         if (tmp < sqrt_centroid2query) {
+                //             skip_count++;
+                //         } else {
+                //             break;
+                //         }
+                //     }
 
-                    for (int64_t ii = list_size - 1; ii >= 0; ii--) {
-                        float tmp_large = sqrt_simi + sqrt_centroid2query;
-                        tmp_large *= tmp_large;
-                        if (tmp_large < candidate2centroid[ii]) {
-                            skip_count_large++;
-                        } else {
-                            break;
-                        }
-                    }
-                    scan_begin = skip_count;
-                    scan_end -= skip_count_large;
-                }
+                //     for (int64_t ii = list_size - 1; ii >= 0; ii--) {
+                //         float tmp_large = sqrt_simi + sqrt_centroid2query;
+                //         tmp_large *= tmp_large;
+                //         if (tmp_large < candidate2centroid[ii]) {
+                //             skip_count_large++;
+                //         } else {
+                //             break;
+                //         }
+                //     }
+                //     scan_begin = skip_count;
+                //     scan_end -= skip_count_large;
+                // }
 
                 IF_STATS {
                     stats->skip_triangle_count += skip_count;
@@ -572,43 +742,44 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                                    list.get_sub_nearest_L2_id(), list.get_sub_nearest_L2_dis(), if_skip.get(), simi, idxi,
                                    stats, centroid_codes.get() + listids[j] * d);
             }
-        } else {
-            for (size_t j = 0; j < nprobe; j++) {
-                IVF& list = lists[listids[j]];
-                const float* candidate2centroid = list.get_candidate2centroid();
-                float centroid2query = centroids2query[j];
-                float s_centroid2query = sqrt(1 - centroid2query * centroid2query);
-                float s_simi = sqrt(1 - simi[0] * simi[0]);
-                size_t list_size = list.get_list_size();
-                size_t scan_begin = 0;
-                size_t scan_end = list_size;
-                if (opt_level & OptLevel::OPT_TRIANGLE) {
-                    float min_cut_degree_cos;
-                    float max_cut_degree_cos;
-                    if (simi[0] < centroid2query) {  // 0 ~ c + s
-                        max_cut_degree_cos = 1;
-                        min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
-                        while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
-                            scan_end--;
-                        }
-                    } else {  // c - s ~ c + s
-                        max_cut_degree_cos = simi[0] * centroid2query + s_simi * s_centroid2query;
-                        min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
-                        while (scan_begin < scan_end && candidate2centroid[scan_begin] > max_cut_degree_cos) {
-                            scan_begin++;
-                        }
-                        while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
-                            scan_end--;
-                        }
-                    }
-                    IF_STATS {
-                        stats->skip_triangle_count += scan_begin + list_size - scan_end;
-                        stats->total_count += list_size;
-                    }
-                }
-                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(), simi, idxi);
-            }
-        }
+        } 
+        // else {
+        //     for (size_t j = 0; j < nprobe; j++) {
+        //         IVF& list = lists[listids[j]];
+        //         const float* candidate2centroid = list.get_candidate2centroid();
+        //         float centroid2query = centroids2query[j];
+        //         float s_centroid2query = sqrt(1 - centroid2query * centroid2query);
+        //         float s_simi = sqrt(1 - simi[0] * simi[0]);
+        //         size_t list_size = list.get_list_size();
+        //         size_t scan_begin = 0;
+        //         size_t scan_end = list_size;
+        //         if (opt_level & OptLevel::OPT_TRIANGLE) {
+        //             float min_cut_degree_cos;
+        //             float max_cut_degree_cos;
+        //             if (simi[0] < centroid2query) {  // 0 ~ c + s
+        //                 max_cut_degree_cos = 1;
+        //                 min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
+        //                 while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
+        //                     scan_end--;
+        //                 }
+        //             } else {  // c - s ~ c + s
+        //                 max_cut_degree_cos = simi[0] * centroid2query + s_simi * s_centroid2query;
+        //                 min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
+        //                 while (scan_begin < scan_end && candidate2centroid[scan_begin] > max_cut_degree_cos) {
+        //                     scan_begin++;
+        //                 }
+        //                 while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
+        //                     scan_end--;
+        //                 }
+        //             }
+        //             IF_STATS {
+        //                 stats->skip_triangle_count += scan_begin + list_size - scan_end;
+        //                 stats->total_count += list_size;
+        //             }
+        //         }
+        //         scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(), simi, idxi);
+        //     }
+        // }
         sort_result(metric, k, simi, idxi);
 
         simi += k;
@@ -618,7 +789,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
     }
 }
 
-Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio) {
+Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, bool simpleVersion) {
     if (n == 0) {
         return Stats();
     }
@@ -629,12 +800,15 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     if (nprobe > nlist) {
         nprobe = nlist;
     }
+    // distance是最终结果，是nq个k维的float向量，每一个float对应着和一个相近向量的距离, labels是对应相近向量的id
+    // 在distance内部的每一行，对应着一个查询，将其看作一个容量为k的优先队列
     init_result(metric, n * k, distances, labels);
     size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), n);
     size_t batch_size = n / nt;
     size_t extra = n % nt;
     std::vector<Stats> stats(nt);
 
+    //把n个查询交给多线程
 #pragma omp parallel for num_threads(nt)
     for (size_t i = 0; i < nt; i++) {
         size_t start, end;
@@ -646,7 +820,11 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
             end = start + batch_size;
         }
         if (start < end) {
-            single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio, &stats[i]);
+            //end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k 是结果存放的起始位置
+            if (simpleVersion)
+                single_thread_search_simple(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio, &stats[i]);
+            else
+                single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio, &stats[i]);
         }
     }
 

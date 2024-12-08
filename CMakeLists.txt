@@ -17,7 +17,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 find_package(OpenMP REQUIRED)
 find_package(GTest REQUIRED)
 
-set(MKL_ROOT "/opt/intel/oneapi/mkl/2024.2")
+set(MKL_ROOT "/opt/intel/oneapi/mkl/2024.1")
 include_directories(${MKL_ROOT}/include)
 link_directories(${MKL_ROOT}/lib/intel64)
 

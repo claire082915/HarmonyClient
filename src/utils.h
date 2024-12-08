@@ -23,7 +23,8 @@
 #include "platform_macros.h"
 
 namespace tribase {
-
+    const std::string BLUE = "\033[1;34m"; // Blue text
+    const std::string RESET = "\033[0m"; // Reset color
 class CsvWriter {
    private:
     std::ofstream file_;
