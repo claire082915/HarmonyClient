@@ -141,6 +141,15 @@ inline void copy_n_partial_vector(const T* from, T* to, size_t dFrom, size_t dTo
             to + vectorIndex * dTo);
     }
 }
+
+template <typename T>
+inline void add_n(const T* src1, const T* src2, T* dest, size_t n) {
+#pragma omp parallel for
+    for(size_t i = 0; i < n; i++) {
+        dest[i] = src1[i] + src2[i];
+    }
+}
+
 template <typename T>
 inline void printVector(std::vector<T>& v, std::string color) {
     using namespace std;

@@ -382,8 +382,8 @@ int main(int argc, char* argv[]) {
         float r2 = calculate_r2(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
         double search_time = stopwatch.elapsedSeconds() / loop;
         // for(int i = 0; i < nq; i++) {
-            // std::cout << "Q" << i << " ";
-            // printVector(distances.get() + i * k, k, BLUE);
+        //     std::cout << "Q" << i << " ";
+        //     printVector(distances.get() + i * k, k, BLUE);
         // }
         stats.simi_ratio = ratio;
         stats.nlist = nlist;

@@ -667,50 +667,105 @@ std::unique_ptr<idx_t[]> Index::findNearNprobeOfCentroidIds(size_t n, const floa
 }
 void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
     std::cout << GREEN << "block search" << RESET << std::endl;
+    //n个查询向量对应的nprobe个聚类中心id
     std::unique_ptr<idx_t[]> listidqueries = findNearNprobeOfCentroidIds(n, queries);
     
+    //算出每个查询向量一共要和多少个向量比较
+    std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n);
+    cout << GREEN ;
+    auto clock1 = std::chrono::high_resolution_clock::now();
+// #pragma omp parallel for 
+    for(size_t q = 0; q < n; q++) {
+        for(size_t i = 0; i < nprobe; i++) {
+            queryCompareSize[q] += lists[listidqueries[q * nprobe + i]].get_list_size();
+        }
+        // cout << queryCompareSize[q] << " ";
+    }
+    auto clock2 = std::chrono::high_resolution_clock::now();
+    std::cout << "1:" << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
+
+    //为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
+    std::unique_ptr<size_t[]> queryCompareSizePreSum = std::make_unique<size_t[]>(n); 
+    for(size_t q = 1; q < n; q++) {
+        queryCompareSizePreSum[q] = queryCompareSizePreSum[q - 1] + queryCompareSize[q - 1];
+    }
+    //所有查询向量加起来一共要比多少个向量
+    size_t totalQueryCompareSize = queryCompareSizePreSum[n - 1] + queryCompareSize[n - 1];
+    auto clock3 = std::chrono::high_resolution_clock::now();
+    std::cout << "2:" << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
+
+    // for(size_t q = 0; q < n; q++) {
+    //     cout << queryCompareSizePreSum[q] << " ";
+    // }
+    cout << RESET << endl;
+
     for(int no = 1; no <= nodeCount; no++) {
         nodes[no].listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
+        nodes[no].queryCompareSize = std::make_unique<size_t[]>(n); //最近的nprobe个聚类中心的id
         copy_n(listidqueries.get(), n * nprobe, nodes[no].listidqueries.get());
+        copy_n(queryCompareSize.get(), n, nodes[no].queryCompareSize.get());
     }
-    vector<vector<float>> distancesForNQuerys = vector<vector<float>>(n); //n个查询向量的dis，铺平了所有聚类
-    vector<vector<idx_t>> idsForNQuerys = vector<vector<idx_t>>(n);
+    auto clock4 = std::chrono::high_resolution_clock::now();
+    std::cout << "3:" << std::chrono::duration<double>(clock4 - clock3).count() << "s" << std::endl;
+    std::unique_ptr<float[]> distancesForNQuerys = std::make_unique<float[]>(totalQueryCompareSize); //n个查询向量的dis，铺平了所有聚类
+    std::unique_ptr<idx_t[]> idsForNQuerys = std::make_unique<idx_t[]>(totalQueryCompareSize);
+
     cout << YELLOW;
+    //计算好idsForNQuerys
+    // size_t curPosition = 0;
+// #pragma omp parallel for
     for (size_t q = 0; q < n; q++) {
+        size_t offset = queryCompareSizePreSum[q];
         for(size_t i = 0; i < nprobe; i++) {
             IVF& list = lists[listidqueries[q * nprobe + i]];
-            for(size_t v = 0; v < list.get_list_size(); v++) {
-                idsForNQuerys[q].push_back(list.candidate_id[v]);
-            }
+            copy_n(list.candidate_id.get(), list.get_list_size(), idsForNQuerys.get() + offset);
+            offset += list.get_list_size();
+            // curPosition += list.get_list_size();
+            // for(size_t v = 0; v < list.get_list_size(); v++) {
+                // idsForNQuerys[q].push_back(list.candidate_id[v]);
+            // }
+            // cout << offset << " ";
         }
-        distancesForNQuerys[q] = vector<float>(idsForNQuerys[q].size());
-        // cout << idsForNQuerys[q].size() << " ";
+        // cout << endl;
+        // distancesForNQuerys[q] = vector<float>(idsForNQuerys[q].size());
     }
+    // assert(curPosition == totalQueryCompareSize);
     cout << RESET;
+    auto clock5 = std::chrono::high_resolution_clock::now();
+    std::cout << "4:" << std::chrono::duration<double>(clock5 - clock4).count() << "s" << std::endl;
     
+// #pragma omp parallel for 
     for(size_t no = 1; no <= nodeCount; no++) {
         for(size_t blockIndex = 0; blockIndex < nodes[no].blockCount; blockIndex++) {
-            vector<vector<float>> blockDistances = nodes[no].search(blockIndex);
+            Node::SearchResult blockDistances = nodes[no].search(blockIndex);
             // cout << blockDistances.size() << endl;
             // for(auto& v : blockDistances) {
             //     printVector(v, GREEN);
             // }
-            for(size_t q = 0; q < nodes[no].blockSize; q++) {
-                assert(blockDistances.at(q).size() == distancesForNQuerys.at(q + nodes[no].blockSize * blockIndex).size());
-                for(size_t i = 0; i < blockDistances[q].size(); i++) {
-                    distancesForNQuerys[q + nodes[no].blockSize * blockIndex][i] += blockDistances[q][i];
-                } 
-            }
+            size_t q = blockIndex * nodes[no].blockSize;
+            size_t queryOffset = queryCompareSizePreSum[q];
+            //加和
+            add_n(blockDistances.distances.get(), distancesForNQuerys.get() + queryOffset, distancesForNQuerys.get() + queryOffset, blockDistances.size);
+            // printVector(distancesForNQuerys.get() + queryOffset, blockDistances.size, GREEN);
+            // for(size_t q = 0; q < nodes[no].blockSize; q++) {
+                // assert(blockDistances.at(q).size() == distancesForNQuerys.at(q + nodes[no].blockSize * blockIndex).size());
+                // for(size_t i = 0; i < blockDistances[q].size(); i++) {
+                //     distancesForNQuerys[q + nodes[no].blockSize * blockIndex][i] += blockDistances[q][i];
+                // } 
+            // }
         }
     }
+    auto clock6 = std::chrono::high_resolution_clock::now();
+    std::cout << "5:" << std::chrono::duration<double>(clock6 - clock5).count() << "s" << std::endl;
 
     float* disHeap = distances;
     idx_t* idHeap = labels;
+// #pragma omp parallel for 
     for(size_t q = 0; q < n; q++) {
-        // printVector(distancesForNQuerys[q], GREEN);
-        for(size_t i = 0; i < distancesForNQuerys[q].size(); i++) {
-            float dis = distancesForNQuerys[q][i];
-            idx_t id = idsForNQuerys[q].at(i);
+        for(size_t i = 0; i < queryCompareSize[q]; i++) {
+            size_t offset = queryCompareSizePreSum[q] + i;
+            float dis = distancesForNQuerys[offset];
+            idx_t id = idsForNQuerys[offset];
             if (dis < disHeap[0]) {
                     //比堆顶
                 heap_replace_top<MetricType::METRIC_L2>(k, disHeap, idHeap, dis, id);
@@ -725,12 +780,9 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
         idHeap += k;
         disHeap += k;
     }
-    // for(int i = 0; i < n; i++) {
-    //     cout << "q" << i;
-    //     printVector(listidqueries.get() + i * nprobe, nprobe, GREEN);
-    //     printVector(nodes[1].listidqueries.get() + i * nprobe, nprobe, BLUE);
-    // }
-    // cout << nlist << endl;
+    auto clock7 = std::chrono::high_resolution_clock::now();
+    std::cout << "6:" << std::chrono::duration<double>(clock7 - clock6).count() << "s" << std::endl;
+    
 }
 // void Index::single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
 //     // std::cout << BLUE << "simple version of search" << RESET;
@@ -872,43 +924,43 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                                    stats, centroid_codes.get() + listids[j] * d);
             }
         } 
-        // else {
-        //     for (size_t j = 0; j < nprobe; j++) {
-        //         IVF& list = lists[listids[j]];
-        //         const float* candidate2centroid = list.get_candidate2centroid();
-        //         float centroid2query = centroids2query[j];
-        //         float s_centroid2query = sqrt(1 - centroid2query * centroid2query);
-        //         float s_simi = sqrt(1 - simi[0] * simi[0]);
-        //         size_t list_size = list.get_list_size();
-        //         size_t scan_begin = 0;
-        //         size_t scan_end = list_size;
-        //         if (opt_level & OptLevel::OPT_TRIANGLE) {
-        //             float min_cut_degree_cos;
-        //             float max_cut_degree_cos;
-        //             if (simi[0] < centroid2query) {  // 0 ~ c + s
-        //                 max_cut_degree_cos = 1;
-        //                 min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
-        //                 while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
-        //                     scan_end--;
-        //                 }
-        //             } else {  // c - s ~ c + s
-        //                 max_cut_degree_cos = simi[0] * centroid2query + s_simi * s_centroid2query;
-        //                 min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
-        //                 while (scan_begin < scan_end && candidate2centroid[scan_begin] > max_cut_degree_cos) {
-        //                     scan_begin++;
-        //                 }
-        //                 while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
-        //                     scan_end--;
-        //                 }
-        //             }
-        //             IF_STATS {
-        //                 stats->skip_triangle_count += scan_begin + list_size - scan_end;
-        //                 stats->total_count += list_size;
-        //             }
-        //         }
-        //         scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(), simi, idxi);
-        //     }
-        // }
+        else {
+            for (size_t j = 0; j < nprobe; j++) {
+                IVF& list = lists[listids[j]];
+                const float* candidate2centroid = list.get_candidate2centroid();
+                float centroid2query = centroids2query[j];
+                float s_centroid2query = sqrt(1 - centroid2query * centroid2query);
+                float s_simi = sqrt(1 - simi[0] * simi[0]);
+                size_t list_size = list.get_list_size();
+                size_t scan_begin = 0;
+                size_t scan_end = list_size;
+                if (opt_level & OptLevel::OPT_TRIANGLE) {
+                    float min_cut_degree_cos;
+                    float max_cut_degree_cos;
+                    if (simi[0] < centroid2query) {  // 0 ~ c + s
+                        max_cut_degree_cos = 1;
+                        min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
+                        while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
+                            scan_end--;
+                        }
+                    } else {  // c - s ~ c + s
+                        max_cut_degree_cos = simi[0] * centroid2query + s_simi * s_centroid2query;
+                        min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
+                        while (scan_begin < scan_end && candidate2centroid[scan_begin] > max_cut_degree_cos) {
+                            scan_begin++;
+                        }
+                        while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
+                            scan_end--;
+                        }
+                    }
+                    IF_STATS {
+                        stats->skip_triangle_count += scan_begin + list_size - scan_end;
+                        stats->total_count += list_size;
+                    }
+                }
+                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(), simi, idxi);
+            }
+        }
         sort_result(metric, k, simi, idxi);
 
         simi += k;
@@ -921,7 +973,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
 
 Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, bool blockVersion) {
     if(blockVersion) 
-        std::cout << BLUE << "simple version of search" << RESET << std::endl;
+        std::cout << BLUE << "block version of search" << RESET << std::endl;
     if (n == 0) {
         return Stats();
     }

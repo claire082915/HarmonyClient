@@ -32,6 +32,7 @@ public:
     std::unique_ptr<float[]> querys; //nq个查询向量, 维度是block_dim
     std::unique_ptr<SearchBlock[]> blocks; //按照搜索顺序排列，第1个先搜索
     std::unique_ptr<idx_t[]> listidqueries; //nq * nprobe 查询向量相近的聚类id
+    std::unique_ptr<size_t[]> queryCompareSize; //nq * nprobe 查询向量相近的聚类id
 
     void addIVFs(IVF* ivfs, size_t ivfCnt);
     void init(size_t id, size_t d, size_t block_dim, size_t nodeCount, IVF* ivfs, size_t nlist, const float* querys, size_t querySize, size_t blockCount, size_t nprobe) 
@@ -56,11 +57,50 @@ public:
         this->querys = std::make_unique<float[]>(querySize * block_dim);
         copy_n_partial_vector(querys, this->querys.get(), d, block_dim, block_dim * (id - 1), querySize);
     }
-    vector<vector<float>> search(size_t blockId) {
+
+    struct SearchResult {
+        std::unique_ptr<float[]> distances;
+        size_t size;
+
+        // Default constructor
+        SearchResult() : distances(nullptr), size(0) {}
+
+        // Parameterized constructor
+        SearchResult(std::unique_ptr<float[]> dist, size_t sz)
+            : distances(std::move(dist)), size(sz) {}
+
+        // Move constructor
+        SearchResult(SearchResult&& other) noexcept
+            : distances(std::move(other.distances)), size(other.size) {
+            other.size = 0;
+        }
+
+        // Move assignment operator
+        SearchResult& operator=(SearchResult&& other) noexcept {
+            if (this != &other) {
+                distances = std::move(other.distances);
+                size = other.size;
+                other.size = 0;
+            }
+            return *this;
+        }
+
+        // Delete copy constructor and copy assignment operator
+        SearchResult(const SearchResult&) = delete;
+        SearchResult& operator=(const SearchResult&) = delete;
+    };
+
+    SearchResult search(size_t blockId) {
         size_t queryStart = blockId * blockSize;
         // cout << blockId << " " << blockSize << " " << queryStart << nprobe << endl;
-        vector<vector<float>> distances = vector<vector<float>>(blockSize, vector<float>());
+        size_t totalQueryCompareSize = 0;
+        for(size_t q = queryStart; q < queryStart + blockSize; q++) {
+            totalQueryCompareSize += queryCompareSize[q];
+        }
+        // cout << "node " << id << "block: " << blockId << " compare size" << totalQueryCompareSize << endl;
+        std::unique_ptr<float[]> distances = std::make_unique<float[]>(totalQueryCompareSize);
 
+        size_t curDistancePosition = 0;
         for(size_t q = queryStart; q < queryStart + blockSize; q++) {
             // cout << "q" << q << endl;
             for(size_t i = 0; i < nprobe; i++) {
@@ -69,10 +109,13 @@ public:
                 for(size_t v = 0; v < ivfs[ivfId].get_list_size(); v++) {
                     float dis = calculatedEuclideanDistance(querys.get() + q * block_dim, ivfs[ivfId].candidate_codes.get() + v * block_dim, block_dim);
                     // cout << "push " << q - queryStart << dis << endl;
-                    distances[q - queryStart].push_back(dis);
+                    // distances[q - queryStart].push_back(dis);
+                    distances[curDistancePosition] = dis;
+                    curDistancePosition++;
                 }
             }
         }
+        assert(curDistancePosition == totalQueryCompareSize);
         // cout << BLUE; 
         // cout << distances.size() << " " << id << endl;
         // for(auto vec : distances) {
@@ -83,7 +126,7 @@ public:
         //     cout << endl;
         // }
         // cout << RESET;
-        return distances;
+        return SearchResult(move(distances), totalQueryCompareSize);
     }
     
    
