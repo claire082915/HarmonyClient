@@ -29,6 +29,9 @@ Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel 
     std::iota(centroid_ids.get(), centroid_ids.get() + nlist, 0);
     
 }
+void Index::preSearch(size_t nb) {
+    distancesForNQuerys = std::make_unique<float[]>(presumeNq * nb);
+}
 
 Index& Index::operator=(Index&& other) noexcept {
     d = other.d;
@@ -666,14 +669,18 @@ std::unique_ptr<idx_t[]> Index::findNearNprobeOfCentroidIds(size_t n, const floa
     return listidqueries;
 }
 void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
+    printIndex();
     std::cout << GREEN << "block search" << RESET << std::endl;
+    auto clock0 = std::chrono::high_resolution_clock::now();
     //n个查询向量对应的nprobe个聚类中心id
     std::unique_ptr<idx_t[]> listidqueries = findNearNprobeOfCentroidIds(n, queries);
     
+    auto clock1 = std::chrono::high_resolution_clock::now();
+    std::cout << "findNearNprobeOfCentroidIds:" << std::chrono::duration<double>(clock1 - clock0).count() << "s" << std::endl;
+
     //算出每个查询向量一共要和多少个向量比较
     std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n);
-    cout << GREEN ;
-    auto clock1 = std::chrono::high_resolution_clock::now();
+    // cout << GREEN ;
 #pragma omp parallel for 
     for(size_t q = 0; q < n; q++) {
         for(size_t i = 0; i < nprobe; i++) {
@@ -682,73 +689,80 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
         // cout << queryCompareSize[q] << " ";
     }
     auto clock2 = std::chrono::high_resolution_clock::now();
-    std::cout << "1:" << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
+    std::cout << "queryCompareSize:" << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
 
-    //为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
-    std::unique_ptr<size_t[]> queryCompareSizePreSum = std::make_unique<size_t[]>(n); 
-    for(size_t q = 1; q < n; q++) {
+    //为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q], 注意大小是n + 1
+    std::unique_ptr<size_t[]> queryCompareSizePreSum = std::make_unique<size_t[]>(n + 1); 
+    for(size_t q = 1; q < n + 1; q++) {
         queryCompareSizePreSum[q] = queryCompareSizePreSum[q - 1] + queryCompareSize[q - 1];
     }
     //所有查询向量加起来一共要比多少个向量
     size_t totalQueryCompareSize = queryCompareSizePreSum[n - 1] + queryCompareSize[n - 1];
     auto clock3 = std::chrono::high_resolution_clock::now();
-    std::cout << "2:" << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
+    std::cout << "queryCompareSizePreSum2:" << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
 
     // for(size_t q = 0; q < n; q++) {
     //     cout << queryCompareSizePreSum[q] << " ";
     // }
-    cout << RESET << endl;
+    // cout << RESET << endl;
 
 #pragma omp parallel for
-    for(int no = 1; no <= nodeCount; no++) {
-        nodes[no].listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
-        nodes[no].queryCompareSize = std::make_unique<size_t[]>(n);  
-        nodes[no].queryCompareSizePreSum = std::make_unique<size_t[]>(n); 
-        copy_n(listidqueries.get(), n * nprobe, nodes[no].listidqueries.get());
-        copy_n(queryCompareSize.get(), n, nodes[no].queryCompareSize.get());
-        copy_n(queryCompareSizePreSum.get(), n, nodes[no].queryCompareSizePreSum.get());
+    for(int nodeId = 1; nodeId <= nodeCount; nodeId++) {
+        nodes[nodeId].listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
+        nodes[nodeId].queryCompareSize = std::make_unique<size_t[]>(n);  
+        nodes[nodeId].queryCompareSizePreSum = std::make_unique<size_t[]>(n + 1); 
+        copy_n(listidqueries.get(), n * nprobe, nodes[nodeId].listidqueries.get());
+        copy_n(queryCompareSize.get(), n, nodes[nodeId].queryCompareSize.get());
+        copy_n(queryCompareSizePreSum.get(), n + 1, nodes[nodeId].queryCompareSizePreSum.get());
     }
     auto clock4 = std::chrono::high_resolution_clock::now();
-    std::cout << "3:" << std::chrono::duration<double>(clock4 - clock3).count() << "s" << std::endl;
-    std::unique_ptr<float[]> distancesForNQuerys = std::make_unique<float[]>(totalQueryCompareSize); //n个查询向量的dis，铺平了所有聚类
-    std::unique_ptr<idx_t[]> idsForNQuerys = std::make_unique<idx_t[]>(totalQueryCompareSize);
+    std::cout << "copy:" << std::chrono::duration<double>(clock4 - clock3).count() << "s" << std::endl;
+    
+    if(presumeNq * nb < totalQueryCompareSize) {
+        distancesForNQuerys = std::make_unique<idx_t[]>(totalQueryCompareSize);
+    }
+    auto clock5 = std::chrono::high_resolution_clock::now();
 
-    cout << YELLOW;
+    std::cout << "malloc distances:" << std::chrono::duration<double>(clock5 - clock4).count() << "s" << std::endl;
+    // std::unique_ptr<idx_t[]> idsForNQuerys = std::make_unique<idx_t[]>(totalQueryCompareSize);
+
     //计算好idsForNQuerys
     // size_t curPosition = 0;
-#pragma omp parallel for
-    for (size_t q = 0; q < n; q++) {
-        size_t offset = queryCompareSizePreSum[q];
-        for(size_t i = 0; i < nprobe; i++) {
-            IVF& list = lists[listidqueries[q * nprobe + i]];
-            copy_n(list.candidate_id.get(), list.get_list_size(), idsForNQuerys.get() + offset);
-            offset += list.get_list_size();
-            // curPosition += list.get_list_size();
-            // for(size_t v = 0; v < list.get_list_size(); v++) {
-                // idsForNQuerys[q].push_back(list.candidate_id[v]);
-            // }
-            // cout << offset << " ";
-        }
-        // cout << endl;
-        // distancesForNQuerys[q] = vector<float>(idsForNQuerys[q].size());
-    }
+// #pragma omp parallel for
+//     for (size_t q = 0; q < n; q++) {
+//         size_t offset = queryCompareSizePreSum[q];
+//         for(size_t i = 0; i < nprobe; i++) {
+//             IVF& list = lists[listidqueries[q * nprobe + i]];
+//             // IVF& list = lists[listidqueries[q * nprobe + i]];
+//             // copy_n(list.candidate_id.get(), list.get_list_size(), idsForNQuerys.get() + offset);
+//             // offset += list.get_list_size();
+//             // curPosition += list.get_list_size();
+//             // for(size_t v = 0; v < list.get_list_size(); v++) {
+//                 // idsForNQuerys[q].push_back(list.candidate_id[v]);
+//             // }
+//             // cout << offset << " ";
+//         }
+//         // cout << endl;
+//         // distancesForNQuerys[q] = vector<float>(idsForNQuerys[q].size());
+//     }
     // assert(curPosition == totalQueryCompareSize);
-    cout << RESET;
-    auto clock5 = std::chrono::high_resolution_clock::now();
-    std::cout << "4:" << std::chrono::duration<double>(clock5 - clock4).count() << "s" << std::endl;
     
 // #pragma omp parallel for 
-    for(size_t no = 1; no <= nodeCount; no++) {
-        for(size_t blockIndex = 0; blockIndex < nodes[no].blockCount; blockIndex++) {
-            Node::SearchResult blockDistances = nodes[no].search(blockIndex);
+    for(size_t nodeId = 1; nodeId <= nodeCount; nodeId++) {
+// #pragma omp parallel for 
+        for(size_t blockIndex = 0; blockIndex < nodes[nodeId].blockCount; blockIndex++) {
+            // auto clockadd = std::chrono::high_resolution_clock::now();
+            Node::SearchResult blockDistances = nodes[nodeId].search(blockIndex);
             // cout << blockDistances.size() << endl;
             // for(auto& v : blockDistances) {
             //     printVector(v, GREEN);
             // }
-            size_t q = blockIndex * nodes[no].blockSize;
+            size_t q = blockIndex * nodes[nodeId].blockSize;
             size_t queryOffset = queryCompareSizePreSum[q];
             //加和
             add_n(blockDistances.distances.get(), distancesForNQuerys.get() + queryOffset, distancesForNQuerys.get() + queryOffset, blockDistances.size);
+            // auto clockaddEnd = std::chrono::high_resolution_clock::now();
+            // std::cout << "add:" << std::chrono::duration<double>(clockaddEnd - clockadd).count() << "s" << std::endl;
             // printVector(distancesForNQuerys.get() + queryOffset, blockDistances.size, GREEN);
             // for(size_t q = 0; q < nodes[no].blockSize; q++) {
                 // assert(blockDistances.at(q).size() == distancesForNQuerys.at(q + nodes[no].blockSize * blockIndex).size());
@@ -759,33 +773,60 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
         }
     }
     auto clock6 = std::chrono::high_resolution_clock::now();
-    std::cout << "5:" << std::chrono::duration<double>(clock6 - clock5).count() << "s" << std::endl;
+    std::cout << "search:" << std::chrono::duration<double>(clock6 - clock5).count() << "s" << std::endl;
 
+    // for(int i = 0; i < n; i++) {
+    //         std::cout << "Q" << i << " ";
+    //         printVector(labels + i * k, k, BLUE);
+    //     }
 #pragma omp parallel for 
     for(size_t q = 0; q < n; q++) {
         float* disHeap = distances + q * k;
         idx_t* idHeap = labels + q * k;
-        for(size_t i = 0; i < queryCompareSize[q]; i++) {
-            size_t offset = queryCompareSizePreSum[q] + i;
-            float dis = distancesForNQuerys[offset];
-            idx_t id = idsForNQuerys[offset];
-            if (dis < disHeap[0]) {
-                    //比堆顶
-                heap_replace_top<MetricType::METRIC_L2>(k, disHeap, idHeap, dis, id);
-            } 
+        size_t offsetOutOfList = 0;
+        for(size_t i = 0; i < nprobe; i++) {
+            IVF& list = lists[listidqueries[i + q * nprobe]];
+            for(size_t j = 0; j < list.get_list_size(); j++) {
+                float dis = distancesForNQuerys[queryCompareSizePreSum[q] + offsetOutOfList];
+                if (dis < disHeap[0]) {
+                        //比堆顶
+                    idx_t id = list.candidate_id[j];
+                    heap_replace_top<MetricType::METRIC_L2>(k, disHeap, idHeap, dis, id);
+                } 
+                offsetOutOfList++;
+            }
         }
+        // for(size_t i = 0; i < queryCompareSize[q]; i++) {
+        //     size_t offset = queryCompareSizePreSum[q] + i;
+        //     float dis = distancesForNQuerys[offset];
+        //     idx_t id = idsForNQuerys[offset];
+        //     if (dis < disHeap[0]) {
+        //             //比堆顶
+        //         heap_replace_top<MetricType::METRIC_L2>(k, disHeap, idHeap, dis, id);
+        //     } 
+        // }
         // sort(distancesForNQuerys[q].begin(), distancesForNQuerys[q].end());
         // for(size_t i = 0; i < k; i++) {
         //     cout << distancesForNQuerys[q][i] << " " ;
         // } 
         // cout << endl;
         sort_result(metric, k, disHeap, idHeap);
+        // printVector(disHeap, k, BLUE);
+        // printVector(idHeap, k, GREEN);
         // idHeap += k;
         // disHeap += k;
     }
     auto clock7 = std::chrono::high_resolution_clock::now();
-    std::cout << "6:" << std::chrono::duration<double>(clock7 - clock6).count() << "s" << std::endl;
+    std::cout << "heap:" << std::chrono::duration<double>(clock7 - clock6).count() << "s" << std::endl;
     
+}
+void Index::printIndex() {
+    cout << GREEN << "Index:[";
+    cout << "d:" << d;
+    cout << ",nlist:" << nlist;
+    cout << ",nprobe:" << nprobe;
+    cout << ",node:" << nodeCount;
+    cout << endl;
 }
 // void Index::single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
 //     // std::cout << BLUE << "simple version of search" << RESET;
@@ -999,6 +1040,7 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     size_t extra = n % nt;
     std::vector<Stats> stats(nt);
 
+    cout << YELLOW << "original version of search" << endl;
     //把n个查询交给多线程
 #pragma omp parallel for num_threads(nt)
     for (size_t i = 0; i < nt; i++) {

@@ -188,9 +188,20 @@ int main(int argc, char* argv[]) {
     //init query set
     auto [query, nq, _] = loadXvecs(query_path);
 
+    
     cout << YELLOW << "dim:[" << d << "]" << endl;
     cout << YELLOW << "Base:[" << nb << "]" << endl;
     cout << YELLOW << "Query:[" << nq << "]" << endl << RESET;
+    if(block_version) {
+        if(d % nodeCount != 0) {
+            cerr << "Error: d % node must be 0" << endl;
+            return 1;
+        }
+        if(nq % blockCount != 0) {
+            cerr << "Error: nq % block must be 0" << endl;
+            return 1;
+        }
+    }
     
     //init groundtruth
     std::unique_ptr<idx_t[]> ground_truth_I = std::make_unique<idx_t[]>(k * nq);
@@ -359,6 +370,7 @@ int main(int argc, char* argv[]) {
     if (train_only) {
         return 0;
     }
+    index.preSearch(nb);
     auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, bool blockVersion) {
         // std::string simple = blockVersion ? "simple" : "original";
         // std::string output_path = std::format("{}/{}/result/result_nlist_{}_nprobe_{}_opt_{}_k_{}_ratio_{}_{}.{}",
@@ -367,7 +379,7 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
         std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
 
-        if(blockVersion > 0) {
+        if(blockVersion) {
             index.initNodes(nodeCount, query.get(), nq, blockCount);
         }
         if (loop > 1) {
@@ -378,13 +390,14 @@ int main(int argc, char* argv[]) {
         for (size_t j = 0; j < loop; j++) {
             stats = index.search(nq, query.get(), k, distances.get(), labels.get(), ratio, blockVersion);
         }
+        // for(int i = 0; i < nq; i++) {
+        //     std::cout << "Q" << i << " ";
+        //     printVector(ground_truth_I.get() + i * k, k, BLUE);
+        //     printVector(labels.get() + i * k, k, BLUE);
+        // }
         float recall = calculate_recall(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
         float r2 = calculate_r2(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
         double search_time = stopwatch.elapsedSeconds() / loop;
-        // for(int i = 0; i < nq; i++) {
-        //     std::cout << "Q" << i << " ";
-        //     printVector(distances.get() + i * k, k, BLUE);
-        // }
         stats.simi_ratio = ratio;
         stats.nlist = nlist;
         stats.nprobe = nprobe;
@@ -413,10 +426,11 @@ int main(int argc, char* argv[]) {
             for (float ratio : ratios) {
                 if(block_version) {
                     doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true);
+                } else {
+                    std::cout << YELLOW;
+                    doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
+                    std::cout << RESET;
                 }
-                std::cout << YELLOW;
-                doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
-                std::cout << RESET;
             }
         }
         if (early_stop_flag) {

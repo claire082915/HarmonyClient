@@ -144,7 +144,9 @@ inline void copy_n_partial_vector(const T* from, T* to, size_t dFrom, size_t dTo
 
 template <typename T>
 inline void add_n(const T* src1, const T* src2, T* dest, size_t n) {
-#pragma omp parallel for
+
+size_t nt = omp_get_max_threads();
+#pragma omp parallel for num_threads(nt)
     for(size_t i = 0; i < n; i++) {
         dest[i] = src1[i] + src2[i];
     }
@@ -739,8 +741,9 @@ inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, c
             }
         }
     }
+    // std::cout << correct << " "<< true_correct <<std::endl;
     if (metric == MetricType::METRIC_L2) {
-#pragma omp parallel for reduction(+ : correct)
+// #pragma omp parallel for reduction(+ : correct)
         for (size_t i = 0; i < nq; ++i) {
             float topK = std::numeric_limits<float>::max();
             size_t ii = k - 1;
@@ -782,8 +785,8 @@ inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, c
             }
         }
     }
-    // assert(1.0 * true_correct / correct > 0.99);
-    return static_cast<float>(correct) / (nq * k);
+    assert(1.0 * true_correct / correct > 0.99);
+    return static_cast<float>(true_correct) / (nq * k);
 }
 
 inline float calculate_r2(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k, MetricType metric, size_t gt_k = 0) {

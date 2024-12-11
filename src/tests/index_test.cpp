@@ -57,6 +57,11 @@ TEST(IndexTest, L2NodeTest) {
     double time2 = std::chrono::duration_cast<std::chrono::microseconds>(end2 - start2).count() / 1e6;
 
     std::cout << std::format("Time_our:\t{}\nTime_faiss:\t{}\n", time, time2);
+    for(size_t i = 0; i < nq; i++) {
+        std::cout << "Q" << i << " ";
+        printVector(g_dis.get() + i * k, k, BLUE);
+        printVector(dis.get() + i * k, k, BLUE);
+    }
     double recall = calculate_recall(ids.get(), dis.get(), g_ids.get(), g_dis.get(), nq, k, MetricType::METRIC_L2);
     stats.recall = recall;
     stats.print();

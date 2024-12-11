@@ -40,6 +40,9 @@ public:
     void init(size_t id, size_t d, size_t block_dim, size_t nodeCount, IVF* ivfs, size_t nlist, const float* querys, size_t querySize, size_t blockCount, size_t nprobe) 
     {
         this->id = id;
+        if (nprobe > nlist) {
+            nprobe = nlist;
+        }
         this->nprobe = nprobe;
         this->d = d;
         this->block_dim = block_dim;
@@ -93,18 +96,23 @@ public:
     };
 
     SearchResult search(size_t blockId) {
-        auto clock1 = std::chrono::high_resolution_clock::now();
         size_t queryStart = blockId * blockSize;
         // cout << blockId << " " << blockSize << " " << queryStart << nprobe << endl;
-        size_t totalQueryCompareSize = 0;
-        for(size_t q = queryStart; q < queryStart + blockSize; q++) {
-            totalQueryCompareSize += queryCompareSize[q];
-        }
-        // cout << "node " << id << "block: " << blockId << " compare size" << totalQueryCompareSize << endl;
+        // size_t totalQueryCompareSize = 0;
+        size_t totalQueryCompareSize = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
+        // cout << queryCompareSizePreSum[queryStart + blockSize] << endl;
+        cout << blockId << " " << blockSize << " " << queryStart << " " << totalQueryCompareSize << endl;
+        // for(size_t q = queryStart; q < queryStart + blockSize; q++) {
+        //     totalQueryCompareSize += queryCompareSize[q];
+        // }
+        // // cout << "node " << id << "block: " << blockId << " compare size" << totalQueryCompareSize << endl;
+        auto clock1 = std::chrono::high_resolution_clock::now();
         std::unique_ptr<float[]> distances = std::make_unique<float[]>(totalQueryCompareSize);
-
-        // size_t curDistancePosition = 0;
-#pragma omp parallel for
+        auto clock2 = std::chrono::high_resolution_clock::now();
+        std::cout << "node" << id << '|' << blockId << "| malloc" << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
+        // // size_t curDistancePosition = 0;
+        size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), blockSize);
+#pragma omp parallel for num_threads(nt)
         for(size_t q = queryStart; q < queryStart + blockSize; q++) {
             // cout << "q" << q << endl;
             size_t queryOffset = queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart]; //第q个查询的结果应该存的地址偏移量
@@ -116,10 +124,12 @@ public:
                     float dis = calculatedEuclideanDistance(querys.get() + q * block_dim, ivfs[ivfId].candidate_codes.get() + v * block_dim, block_dim);
                     // cout << "push " << q - queryStart << dis << endl;
                     // distances[q - queryStart].push_back(dis);
+                    assert(queryOffset + curDistancePosition < totalQueryCompareSize);
                     distances[queryOffset + curDistancePosition] = dis;
                     curDistancePosition++;
                 }
             }
+            // cout << curDistancePosition << " " << queryCompareSize[q] << endl;
             assert(curDistancePosition == queryCompareSize[q]);
         }
         // assert(curDistancePosition == totalQueryCompareSize);
@@ -133,8 +143,10 @@ public:
         //     cout << endl;
         // }
         // cout << RESET;
-        auto clock2 = std::chrono::high_resolution_clock::now();
-        std::cout << "node:" << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
+
+        //malloc0.3s, search0.9s
+        auto clock3 = std::chrono::high_resolution_clock::now();
+        std::cout << "node" << id << '|' << blockId << "| search" << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
         return SearchResult(move(distances), totalQueryCompareSize);
     }
     

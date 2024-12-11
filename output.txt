@@ -1,424 +1,70 @@
-[1;34mnumber of nodes : 8[0m
-[1;33mdim:[128]
-[1;33mBase:[10000]
-[1;33mQuery:[100]
-[0m[1;34mYou are using Simple version of add[0m
-[1;34mend of add[0m
-[1;34mnodes:1 16[0m
-[1;34mnodes:2 16[0m
-[1;34mnodes:3 16[0m
-[1;34mnodes:4 16[0m
-[1;34mnodes:5 16[0m
-[1;34mnodes:6 16[0m
-[1;34mnodes:7 16[0m
-[1;34mnodes:8 16[0m
-[1;34mblock version of search[0m
-[1;32mblock search[0m
-[1;32m4743 4897 5103 4897 5004 4897 4897 4904 5103 5103 4897 5103 4897 4897 5068 5013 4897 4897 5060 4897 4905 5103 5103 5103 5103 4987 5103 5004 5103 5103 5103 5103 4987 4747 5103 4818 4897 4817 5103 4951 5103 4868 5044 5103 4818 5103 4903 4755 5149 5103 5103 5007 5103 5103 4770 4943 5103 4897 5189 4998 5103 5103 4974 4963 5002 4752 5103 4931 5004 5103 5062 4913 5103 5014 5103 5152 4939 4947 5103 4943 4921 5020 5044 5103 5103 4936 4987 4888 4784 4901 5103 5006 5103 5029 4916 4770 5103 5061 4987 5001 [0m
-[1;33m[0mnode 1block: 0 compare size9640
-node 1block: 1 compare size10000
-node 1block: 2 compare size9901
-node 1block: 3 compare size9801
-node 1block: 4 compare size10206
-node 1block: 5 compare size10000
-node 1block: 6 compare size9794
-node 1block: 7 compare size10081
-node 1block: 8 compare size9794
-node 1block: 9 compare size9957
-node 1block: 10 compare size10008
-node 1block: 11 compare size10206
-node 1block: 12 compare size10090
-node 1block: 13 compare size10107
-node 1block: 14 compare size10206
-node 1block: 15 compare size10206
-node 1block: 16 compare size9734
-node 1block: 17 compare size9921
-node 1block: 18 compare size9714
-node 1block: 19 compare size10054
-node 1block: 20 compare size9971
-node 1block: 21 compare size10147
-node 1block: 22 compare size9921
-node 1block: 23 compare size9658
-node 1block: 24 compare size10252
-node 1block: 25 compare size10110
-node 1block: 26 compare size10206
-node 1block: 27 compare size9713
-node 1block: 28 compare size10000
-node 1block: 29 compare size10187
-node 1block: 30 compare size10206
-node 1block: 31 compare size9937
-node 1block: 32 compare size9754
-node 1block: 33 compare size10034
-node 1block: 34 compare size10107
-node 1block: 35 compare size9975
-node 1block: 36 compare size10117
-node 1block: 37 compare size10255
-node 1block: 38 compare size9886
-node 1block: 39 compare size10046
-node 1block: 40 compare size9941
-node 1block: 41 compare size10147
-node 1block: 42 compare size10039
-node 1block: 43 compare size9875
-node 1block: 44 compare size9685
-node 1block: 45 compare size10109
-node 1block: 46 compare size10132
-node 1block: 47 compare size9686
-node 1block: 48 compare size10164
-node 1block: 49 compare size9988
-node 2block: 0 compare size9640
-node 2block: 1 compare size10000
-node 2block: 2 compare size9901
-node 2block: 3 compare size9801
-node 2block: 4 compare size10206
-node 2block: 5 compare size10000
-node 2block: 6 compare size9794
-node 2block: 7 compare size10081
-node 2block: 8 compare size9794
-node 2block: 9 compare size9957
-node 2block: 10 compare size10008
-node 2block: 11 compare size10206
-node 2block: 12 compare size10090
-node 2block: 13 compare size10107
-node 2block: 14 compare size10206
-node 2block: 15 compare size10206
-node 2block: 16 compare size9734
-node 2block: 17 compare size9921
-node 2block: 18 compare size9714
-node 2block: 19 compare size10054
-node 2block: 20 compare size9971
-node 2block: 21 compare size10147
-node 2block: 22 compare size9921
-node 2block: 23 compare size9658
-node 2block: 24 compare size10252
-node 2block: 25 compare size10110
-node 2block: 26 compare size10206
-node 2block: 27 compare size9713
-node 2block: 28 compare size10000
-node 2block: 29 compare size10187
-node 2block: 30 compare size10206
-node 2block: 31 compare size9937
-node 2block: 32 compare size9754
-node 2block: 33 compare size10034
-node 2block: 34 compare size10107
-node 2block: 35 compare size9975
-node 2block: 36 compare size10117
-node 2block: 37 compare size10255
-node 2block: 38 compare size9886
-node 2block: 39 compare size10046
-node 2block: 40 compare size9941
-node 2block: 41 compare size10147
-node 2block: 42 compare size10039
-node 2block: 43 compare size9875
-node 2block: 44 compare size9685
-node 2block: 45 compare size10109
-node 2block: 46 compare size10132
-node 2block: 47 compare size9686
-node 2block: 48 compare size10164
-node 2block: 49 compare size9988
-node 3block: 0 compare size9640
-node 3block: 1 compare size10000
-node 3block: 2 compare size9901
-node 3block: 3 compare size9801
-node 3block: 4 compare size10206
-node 3block: 5 compare size10000
-node 3block: 6 compare size9794
-node 3block: 7 compare size10081
-node 3block: 8 compare size9794
-node 3block: 9 compare size9957
-node 3block: 10 compare size10008
-node 3block: 11 compare size10206
-node 3block: 12 compare size10090
-node 3block: 13 compare size10107
-node 3block: 14 compare size10206
-node 3block: 15 compare size10206
-node 3block: 16 compare size9734
-node 3block: 17 compare size9921
-node 3block: 18 compare size9714
-node 3block: 19 compare size10054
-node 3block: 20 compare size9971
-node 3block: 21 compare size10147
-node 3block: 22 compare size9921
-node 3block: 23 compare size9658
-node 3block: 24 compare size10252
-node 3block: 25 compare size10110
-node 3block: 26 compare size10206
-node 3block: 27 compare size9713
-node 3block: 28 compare size10000
-node 3block: 29 compare size10187
-node 3block: 30 compare size10206
-node 3block: 31 compare size9937
-node 3block: 32 compare size9754
-node 3block: 33 compare size10034
-node 3block: 34 compare size10107
-node 3block: 35 compare size9975
-node 3block: 36 compare size10117
-node 3block: 37 compare size10255
-node 3block: 38 compare size9886
-node 3block: 39 compare size10046
-node 3block: 40 compare size9941
-node 3block: 41 compare size10147
-node 3block: 42 compare size10039
-node 3block: 43 compare size9875
-node 3block: 44 compare size9685
-node 3block: 45 compare size10109
-node 3block: 46 compare size10132
-node 3block: 47 compare size9686
-node 3block: 48 compare size10164
-node 3block: 49 compare size9988
-node 4block: 0 compare size9640
-node 4block: 1 compare size10000
-node 4block: 2 compare size9901
-node 4block: 3 compare size9801
-node 4block: 4 compare size10206
-node 4block: 5 compare size10000
-node 4block: 6 compare size9794
-node 4block: 7 compare size10081
-node 4block: 8 compare size9794
-node 4block: 9 compare size9957
-node 4block: 10 compare size10008
-node 4block: 11 compare size10206
-node 4block: 12 compare size10090
-node 4block: 13 compare size10107
-node 4block: 14 compare size10206
-node 4block: 15 compare size10206
-node 4block: 16 compare size9734
-node 4block: 17 compare size9921
-node 4block: 18 compare size9714
-node 4block: 19 compare size10054
-node 4block: 20 compare size9971
-node 4block: 21 compare size10147
-node 4block: 22 compare size9921
-node 4block: 23 compare size9658
-node 4block: 24 compare size10252
-node 4block: 25 compare size10110
-node 4block: 26 compare size10206
-node 4block: 27 compare size9713
-node 4block: 28 compare size10000
-node 4block: 29 compare size10187
-node 4block: 30 compare size10206
-node 4block: 31 compare size9937
-node 4block: 32 compare size9754
-node 4block: 33 compare size10034
-node 4block: 34 compare size10107
-node 4block: 35 compare size9975
-node 4block: 36 compare size10117
-node 4block: 37 compare size10255
-node 4block: 38 compare size9886
-node 4block: 39 compare size10046
-node 4block: 40 compare size9941
-node 4block: 41 compare size10147
-node 4block: 42 compare size10039
-node 4block: 43 compare size9875
-node 4block: 44 compare size9685
-node 4block: 45 compare size10109
-node 4block: 46 compare size10132
-node 4block: 47 compare size9686
-node 4block: 48 compare size10164
-node 4block: 49 compare size9988
-node 5block: 0 compare size9640
-node 5block: 1 compare size10000
-node 5block: 2 compare size9901
-node 5block: 3 compare size9801
-node 5block: 4 compare size10206
-node 5block: 5 compare size10000
-node 5block: 6 compare size9794
-node 5block: 7 compare size10081
-node 5block: 8 compare size9794
-node 5block: 9 compare size9957
-node 5block: 10 compare size10008
-node 5block: 11 compare size10206
-node 5block: 12 compare size10090
-node 5block: 13 compare size10107
-node 5block: 14 compare size10206
-node 5block: 15 compare size10206
-node 5block: 16 compare size9734
-node 5block: 17 compare size9921
-node 5block: 18 compare size9714
-node 5block: 19 compare size10054
-node 5block: 20 compare size9971
-node 5block: 21 compare size10147
-node 5block: 22 compare size9921
-node 5block: 23 compare size9658
-node 5block: 24 compare size10252
-node 5block: 25 compare size10110
-node 5block: 26 compare size10206
-node 5block: 27 compare size9713
-node 5block: 28 compare size10000
-node 5block: 29 compare size10187
-node 5block: 30 compare size10206
-node 5block: 31 compare size9937
-node 5block: 32 compare size9754
-node 5block: 33 compare size10034
-node 5block: 34 compare size10107
-node 5block: 35 compare size9975
-node 5block: 36 compare size10117
-node 5block: 37 compare size10255
-node 5block: 38 compare size9886
-node 5block: 39 compare size10046
-node 5block: 40 compare size9941
-node 5block: 41 compare size10147
-node 5block: 42 compare size10039
-node 5block: 43 compare size9875
-node 5block: 44 compare size9685
-node 5block: 45 compare size10109
-node 5block: 46 compare size10132
-node 5block: 47 compare size9686
-node 5block: 48 compare size10164
-node 5block: 49 compare size9988
-node 6block: 0 compare size9640
-node 6block: 1 compare size10000
-node 6block: 2 compare size9901
-node 6block: 3 compare size9801
-node 6block: 4 compare size10206
-node 6block: 5 compare size10000
-node 6block: 6 compare size9794
-node 6block: 7 compare size10081
-node 6block: 8 compare size9794
-node 6block: 9 compare size9957
-node 6block: 10 compare size10008
-node 6block: 11 compare size10206
-node 6block: 12 compare size10090
-node 6block: 13 compare size10107
-node 6block: 14 compare size10206
-node 6block: 15 compare size10206
-node 6block: 16 compare size9734
-node 6block: 17 compare size9921
-node 6block: 18 compare size9714
-node 6block: 19 compare size10054
-node 6block: 20 compare size9971
-node 6block: 21 compare size10147
-node 6block: 22 compare size9921
-node 6block: 23 compare size9658
-node 6block: 24 compare size10252
-node 6block: 25 compare size10110
-node 6block: 26 compare size10206
-node 6block: 27 compare size9713
-node 6block: 28 compare size10000
-node 6block: 29 compare size10187
-node 6block: 30 compare size10206
-node 6block: 31 compare size9937
-node 6block: 32 compare size9754
-node 6block: 33 compare size10034
-node 6block: 34 compare size10107
-node 6block: 35 compare size9975
-node 6block: 36 compare size10117
-node 6block: 37 compare size10255
-node 6block: 38 compare size9886
-node 6block: 39 compare size10046
-node 6block: 40 compare size9941
-node 6block: 41 compare size10147
-node 6block: 42 compare size10039
-node 6block: 43 compare size9875
-node 6block: 44 compare size9685
-node 6block: 45 compare size10109
-node 6block: 46 compare size10132
-node 6block: 47 compare size9686
-node 6block: 48 compare size10164
-node 6block: 49 compare size9988
-node 7block: 0 compare size9640
-node 7block: 1 compare size10000
-node 7block: 2 compare size9901
-node 7block: 3 compare size9801
-node 7block: 4 compare size10206
-node 7block: 5 compare size10000
-node 7block: 6 compare size9794
-node 7block: 7 compare size10081
-node 7block: 8 compare size9794
-node 7block: 9 compare size9957
-node 7block: 10 compare size10008
-node 7block: 11 compare size10206
-node 7block: 12 compare size10090
-node 7block: 13 compare size10107
-node 7block: 14 compare size10206
-node 7block: 15 compare size10206
-node 7block: 16 compare size9734
-node 7block: 17 compare size9921
-node 7block: 18 compare size9714
-node 7block: 19 compare size10054
-node 7block: 20 compare size9971
-node 7block: 21 compare size10147
-node 7block: 22 compare size9921
-node 7block: 23 compare size9658
-node 7block: 24 compare size10252
-node 7block: 25 compare size10110
-node 7block: 26 compare size10206
-node 7block: 27 compare size9713
-node 7block: 28 compare size10000
-node 7block: 29 compare size10187
-node 7block: 30 compare size10206
-node 7block: 31 compare size9937
-node 7block: 32 compare size9754
-node 7block: 33 compare size10034
-node 7block: 34 compare size10107
-node 7block: 35 compare size9975
-node 7block: 36 compare size10117
-node 7block: 37 compare size10255
-node 7block: 38 compare size9886
-node 7block: 39 compare size10046
-node 7block: 40 compare size9941
-node 7block: 41 compare size10147
-node 7block: 42 compare size10039
-node 7block: 43 compare size9875
-node 7block: 44 compare size9685
-node 7block: 45 compare size10109
-node 7block: 46 compare size10132
-node 7block: 47 compare size9686
-node 7block: 48 compare size10164
-node 7block: 49 compare size9988
-node 8block: 0 compare size9640
-node 8block: 1 compare size10000
-node 8block: 2 compare size9901
-node 8block: 3 compare size9801
-node 8block: 4 compare size10206
-node 8block: 5 compare size10000
-node 8block: 6 compare size9794
-node 8block: 7 compare size10081
-node 8block: 8 compare size9794
-node 8block: 9 compare size9957
-node 8block: 10 compare size10008
-node 8block: 11 compare size10206
-node 8block: 12 compare size10090
-node 8block: 13 compare size10107
-node 8block: 14 compare size10206
-node 8block: 15 compare size10206
-node 8block: 16 compare size9734
-node 8block: 17 compare size9921
-node 8block: 18 compare size9714
-node 8block: 19 compare size10054
-node 8block: 20 compare size9971
-node 8block: 21 compare size10147
-node 8block: 22 compare size9921
-node 8block: 23 compare size9658
-node 8block: 24 compare size10252
-node 8block: 25 compare size10110
-node 8block: 26 compare size10206
-node 8block: 27 compare size9713
-node 8block: 28 compare size10000
-node 8block: 29 compare size10187
-node 8block: 30 compare size10206
-node 8block: 31 compare size9937
-node 8block: 32 compare size9754
-node 8block: 33 compare size10034
-node 8block: 34 compare size10107
-node 8block: 35 compare size9975
-node 8block: 36 compare size10117
-node 8block: 37 compare size10255
-node 8block: 38 compare size9886
-node 8block: 39 compare size10046
-node 8block: 40 compare size9941
-node 8block: 41 compare size10147
-node 8block: 42 compare size10039
-node 8block: 43 compare size9875
-node 8block: 44 compare size9685
-node 8block: 45 compare size10109
-node 8block: 46 compare size10132
-node 8block: 47 compare size9686
-node 8block: 48 compare size10164
-node 8block: 49 compare size9988
-nprobe:50 opt_level: 0 simi_ratio: 1
-time_speedup: 5.82% pruning_speedup: 0.00% faiss_query_time: 0.040295 query_time: 0.692068
-recall: 0 r2: -nan
-[1;33mnprobe:50 opt_level: 0 simi_ratio: 1
-time_speedup: 497.69% pruning_speedup: 100.00% faiss_query_time: 0.040295 query_time: 0.008096
-recall: 1 r2: 0
-[0m
+[lichengqi@localhost VectorDB]$ ./release/bin/query --benchmarks_path ./benchmarks --dataset msong   --opt_levels OPT_NONE   --nprobes 500  --block 4 --node 4  --cache  
+number of nodes : 4
+dim:[420]
+Base:[994185]
+Query:[1000]
+nodes:1 105
+nodes:2 105
+nodes:3 105
+nodes:4 105
+block version of search
+Index:[d:420,nlist:997,nprobe:500,node:4
+block search
+findNearNprobeOfCentroidIds:0.676637s
+queryCompareSize:0.000137225s
+queryCompareSizePreSum2:1.7871e-05s
+copy:0.00169186s
+idsForNQuerys:1.21838s
+0 250 0 159260193
+node1|0| malloc0.100664s
+node1|0| search0.523312s
+1 250 250 160887488
+node1|1| malloc0.10039s
+node1|1| search0.508099s
+2 250 500 162150364
+node1|2| malloc0.0986918s
+node1|2| search0.516903s
+3 250 750 160792545
+node1|3| malloc0.0987443s
+node1|3| search0.513889s
+0 250 0 159260193
+node2|0| malloc0.0974872s
+node2|0| search0.523878s
+1 250 250 160887488
+node2|1| malloc0.0973903s
+node2|1| search0.446358s
+2 250 500 162150364
+node2|2| malloc0.0982391s
+node2|2| search0.39799s
+3 250 750 160792545
+node2|3| malloc0.0974509s
+node2|3| search0.394042s
+0 250 0 159260193
+node3|0| malloc0.0968497s
+node3|0| search0.448787s
+1 250 250 160887488
+node3|1| malloc0.0977252s
+node3|1| search0.412595s
+2 250 500 162150364
+node3|2| malloc0.0981497s
+node3|2| search0.412951s
+3 250 750 160792545
+node3|3| malloc0.0977725s
+node3|3| search0.427943s
+0 250 0 159260193
+node4|0| malloc0.097773s
+node4|0| search0.440796s
+1 250 250 160887488
+node4|1| malloc0.0976099s
+node4|1| search0.402506s
+2 250 500 162150364
+node4|2| malloc0.0980323s
+node4|2| search0.409477s
+3 250 750 160792545
+node4|3| malloc0.0985746s
+node4|3| search0.400764s
+search:9.03269s
+heap:0.0269425s
+nprobe:500 opt_level: 0 simi_ratio: 1
+time_speedup: 55.39% pruning_speedup: 0.00% faiss_query_time: 6.081421 query_time: 10.979144
+recall: 0.999180018901825 r2: 2.9802322387695312e-06
