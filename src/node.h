@@ -33,6 +33,8 @@ public:
     std::unique_ptr<SearchBlock[]> blocks; //按照搜索顺序排列，第1个先搜索
     std::unique_ptr<idx_t[]> listidqueries; //nq * nprobe 查询向量相近的聚类id
     std::unique_ptr<size_t[]> queryCompareSize; //nq * nprobe 查询向量相近的聚类id
+    //为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
+    std::unique_ptr<size_t[]> queryCompareSizePreSum;
 
     void addIVFs(IVF* ivfs, size_t ivfCnt);
     void init(size_t id, size_t d, size_t block_dim, size_t nodeCount, IVF* ivfs, size_t nlist, const float* querys, size_t querySize, size_t blockCount, size_t nprobe) 
@@ -91,6 +93,7 @@ public:
     };
 
     SearchResult search(size_t blockId) {
+        auto clock1 = std::chrono::high_resolution_clock::now();
         size_t queryStart = blockId * blockSize;
         // cout << blockId << " " << blockSize << " " << queryStart << nprobe << endl;
         size_t totalQueryCompareSize = 0;
@@ -100,9 +103,12 @@ public:
         // cout << "node " << id << "block: " << blockId << " compare size" << totalQueryCompareSize << endl;
         std::unique_ptr<float[]> distances = std::make_unique<float[]>(totalQueryCompareSize);
 
-        size_t curDistancePosition = 0;
+        // size_t curDistancePosition = 0;
+#pragma omp parallel for
         for(size_t q = queryStart; q < queryStart + blockSize; q++) {
             // cout << "q" << q << endl;
+            size_t queryOffset = queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart]; //第q个查询的结果应该存的地址偏移量
+            size_t curDistancePosition = 0; //在一个查询向量的结果内
             for(size_t i = 0; i < nprobe; i++) {
                 idx_t ivfId = listidqueries[q * nprobe + i];
                 // cout << "ivfId" << ivfId << endl;
@@ -110,12 +116,13 @@ public:
                     float dis = calculatedEuclideanDistance(querys.get() + q * block_dim, ivfs[ivfId].candidate_codes.get() + v * block_dim, block_dim);
                     // cout << "push " << q - queryStart << dis << endl;
                     // distances[q - queryStart].push_back(dis);
-                    distances[curDistancePosition] = dis;
+                    distances[queryOffset + curDistancePosition] = dis;
                     curDistancePosition++;
                 }
             }
+            assert(curDistancePosition == queryCompareSize[q]);
         }
-        assert(curDistancePosition == totalQueryCompareSize);
+        // assert(curDistancePosition == totalQueryCompareSize);
         // cout << BLUE; 
         // cout << distances.size() << " " << id << endl;
         // for(auto vec : distances) {
@@ -126,6 +133,8 @@ public:
         //     cout << endl;
         // }
         // cout << RESET;
+        auto clock2 = std::chrono::high_resolution_clock::now();
+        std::cout << "node:" << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
         return SearchResult(move(distances), totalQueryCompareSize);
     }
     
