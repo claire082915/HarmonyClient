@@ -105,13 +105,14 @@ class IVFScan : public IVFScanBase {
     }
 #endif
 
+    //让query和list_size个向量计算距离，ids,codes对应list_size个向量，simi和idxi是存放结果的位置，是堆
     void lite_scan_codes(size_t list_size,
                          const float* codes,
                          const size_t* ids,
                          float* simi,
                          idx_t* idxi) override {
         for (size_t i = 0; i < list_size; i++) {
-            //和每一个中心进行比较，每一个i和一个中心绑定
+            //和每一个待比较向量进行比较，每一个i和一个待比较向量绑定
             const float* candicate = codes + i * d;
             float dis = 0;
             if constexpr (metric == MetricType::METRIC_IP) {

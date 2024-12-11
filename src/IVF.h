@@ -8,11 +8,13 @@
 namespace tribase {
 class IVF {
    public:
-    size_t list_size;
+    
+    size_t list_size; //聚类中有多少个点
     size_t d;
     size_t sub_k;
     OptLevel opt_level;
 
+    //本聚类中所有点的id和向量表示
     std::unique_ptr<size_t[]> candidate_id;
     std::unique_ptr<float[]> candidate_codes;
 

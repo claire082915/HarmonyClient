@@ -9,6 +9,7 @@
 #include "IVF.h"
 #include "IVFScan.hpp"
 #include "heap.hpp"
+#include <vector>
 
 #define SUB_LIST_SIZE 8ul
 #define IP_SUB_RATIO 1.5
@@ -26,6 +27,7 @@ Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel 
     centroid_ids = std::make_unique<idx_t[]>(nlist);
     //centroid_ids初始化为0~nlist-1
     std::iota(centroid_ids.get(), centroid_ids.get() + nlist, 0);
+    
 }
 
 Index& Index::operator=(Index&& other) noexcept {
@@ -198,7 +200,36 @@ void Index::single_thread_nearest_cluster_search(size_t n, const float* queries,
         // no need to sort result, because only one result
     }
 }
+void Index::initNodes(size_t nodeCount, const float* querys, size_t querySize, size_t blockCount) {
 
+    nodes = std::make_unique<Node[]>(nodeCount + 1);
+    this->nodeCount = nodeCount;
+    assert(d % nodeCount == 0);
+    assert(querySize % blockCount == 0);
+// #pragma omp parallel for
+    for(int i = 1; i <= nodeCount; i++) {
+        nodes[i].init(i, d, d / nodeCount, nodeCount, lists.get(), nlist, querys, querySize, blockCount, nprobe);
+// #pragma omp parallel for
+        std::cout << BLUE << "nodes:" << nodes[i].id << " " << nodes[i].block_dim << RESET << std::endl;
+    }
+    // for (size_t i = 0; i < nlist; i++) {
+    //     for(size_t vectorIndex = 0; vectorIndex < lists[i].get_list_size(); vectorIndex++) {
+    //         printVector(lists[i].candidate_codes.get() + vectorIndex * lists[i].d, lists[i].d, YELLOW);
+    //         for(int no = 1; no <= nodeCount; no++) {
+    //             printVector(nodes[no].ivfs[i].candidate_codes.get() + vectorIndex * nodes[no].block_dim, nodes[no].block_dim, BLUE);
+    //         }
+    //     }
+    // }
+    // for (size_t i = 0; i < querySize; i++) {
+    //     printVector(querys + i * d, d, YELLOW);
+    //     for(int no = 1; no <= nodeCount; no++) {
+    //         printVector(nodes[no].querys.get() + i * nodes[no].block_dim, nodes[no].block_dim, BLUE);
+    //     }
+    // }
+    // for (size_t i = 1; i <= nodeCount; i++) {
+    //     // std::cout << BLUE << "nodes:" << nodes[i].id << " " << nodes[i].totalVectorCount << RESET << std::endl;
+    // }
+}
 // void Index::add_lcx(size_t n, const float* codes) {
 
 // }
@@ -206,6 +237,9 @@ void Index::add_simple(size_t n, const float* codes) {
     // const std::string BLUE = "\033[1;34m"; // Blue text
     // const std::string RESET = "\033[0m"; // Reset color
     std::cout << BLUE << "You are using Simple version of add" << RESET << std::endl;
+    // for(size_t i = 0; i < nlist; i++) {
+    //     std::cout << BLUE << centroid_ids[i] << RESET << std::endl;
+    // }
     //把n个向量加到聚类中心里面，codes是向量
     if (n == 0) {
         return;
@@ -292,6 +326,7 @@ void Index::add_simple(size_t n, const float* codes) {
             }
         }
     }
+    std::cout << BLUE << "end of add" << RESET << std::endl;
 }
 
 void Index::add(size_t n, const float* codes) {
@@ -603,61 +638,154 @@ void Index::add(size_t n, const float* codes) {
         std::cout << std::format("add elapsed: {:.2f}s\n", std::chrono::duration<double>(tic2 - tic1).count());
     }
 }
-void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
-
-}
-void Index::single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
-    //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
-
+std::unique_ptr<idx_t[]> Index::findNearNprobeOfCentroidIds(size_t n, const float* queries) {
     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe); //搜索最近的聚类中心
-    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k); //在聚类中心内部搜
 
     std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe); // n个查询向量到nprobe个聚类中心的距离
     std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
     init_result(metric, n * nprobe, centroid2queries.get(), listidqueries.get()); //优先队列，存储离n个查询向量最近的nprobe个聚类中心
     
     //下面四个向量都和i绑定，也就是和每一个查询绑定
-    float* disi = distances; //结果，查询向量最近的k个向量的距离
-    idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
     float* centroids2query = centroid2queries.get(); //单个查询对应的距离
     idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
 
     for (size_t i = 0; i < n; i++) {
         //每一个i对应一个查询
         scaner_quantizer->set_query(queries + i * d);
-        scaner->set_query(queries + i * d);
         //获取最近的nprobe个聚类中心
         scaner_quantizer->lite_scan_codes(nlist,
                                           centroid_codes.get(),
                                           reinterpret_cast<const size_t*>(centroid_ids.get()),
                                           centroids2query, //ret
-                                          listids); //ret , 分别对应两个堆
+                                          listids); //ret , 分别对应堆
+        //要查的聚类id存储在listids的前nprobe个
         sort_result(metric, nprobe, centroids2query, listids);
-
-        if (metric == MetricType::METRIC_L2) {
-            for (size_t j = 0; j < nprobe; j++) {
-                //在第j个聚类中搜索所有点
-                //list代表聚类
-                IVF& list = lists[listids[j]];
-
-                //查询点到中心的距离
-                float centroid2query = centroids2query[j];
-                //聚类中的点的数量
-                size_t list_size = list.get_list_size();
-
-                size_t scan_begin = 0;
-                size_t scan_end = list_size;
-
-                scaner->lite_scan_codes(list_size,list.get_candidate_codes(), list.get_candidate_id(), disi, idxi);
-            }
-        } 
-        sort_result(metric, k, disi, idxi);
-        disi += k;
-        idxi += k;
         centroids2query += nprobe;
         listids += nprobe;
     }
+    return listidqueries;
 }
+void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
+    std::cout << GREEN << "block search" << RESET << std::endl;
+    std::unique_ptr<idx_t[]> listidqueries = findNearNprobeOfCentroidIds(n, queries);
+    
+    for(int no = 1; no <= nodeCount; no++) {
+        nodes[no].listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
+        copy_n(listidqueries.get(), n * nprobe, nodes[no].listidqueries.get());
+    }
+    vector<vector<float>> distancesForNQuerys = vector<vector<float>>(n); //n个查询向量的dis，铺平了所有聚类
+    vector<vector<idx_t>> idsForNQuerys = vector<vector<idx_t>>(n);
+    cout << YELLOW;
+    for (size_t q = 0; q < n; q++) {
+        for(size_t i = 0; i < nprobe; i++) {
+            IVF& list = lists[listidqueries[q * nprobe + i]];
+            for(size_t v = 0; v < list.get_list_size(); v++) {
+                idsForNQuerys[q].push_back(list.candidate_id[v]);
+            }
+        }
+        distancesForNQuerys[q] = vector<float>(idsForNQuerys[q].size());
+        // cout << idsForNQuerys[q].size() << " ";
+    }
+    cout << RESET;
+    
+    for(size_t no = 1; no <= nodeCount; no++) {
+        for(size_t blockIndex = 0; blockIndex < nodes[no].blockCount; blockIndex++) {
+            vector<vector<float>> blockDistances = nodes[no].search(blockIndex);
+            // cout << blockDistances.size() << endl;
+            // for(auto& v : blockDistances) {
+            //     printVector(v, GREEN);
+            // }
+            for(size_t q = 0; q < nodes[no].blockSize; q++) {
+                assert(blockDistances.at(q).size() == distancesForNQuerys.at(q + nodes[no].blockSize * blockIndex).size());
+                for(size_t i = 0; i < blockDistances[q].size(); i++) {
+                    distancesForNQuerys[q + nodes[no].blockSize * blockIndex][i] += blockDistances[q][i];
+                } 
+            }
+        }
+    }
+
+    float* disHeap = distances;
+    idx_t* idHeap = labels;
+    for(size_t q = 0; q < n; q++) {
+        // printVector(distancesForNQuerys[q], GREEN);
+        for(size_t i = 0; i < distancesForNQuerys[q].size(); i++) {
+            float dis = distancesForNQuerys[q][i];
+            idx_t id = idsForNQuerys[q].at(i);
+            if (dis < disHeap[0]) {
+                    //比堆顶
+                heap_replace_top<MetricType::METRIC_L2>(k, disHeap, idHeap, dis, id);
+            } 
+        }
+        // sort(distancesForNQuerys[q].begin(), distancesForNQuerys[q].end());
+        // for(size_t i = 0; i < k; i++) {
+        //     cout << distancesForNQuerys[q][i] << " " ;
+        // } 
+        // cout << endl;
+        sort_result(metric, k, disHeap, idHeap);
+        idHeap += k;
+        disHeap += k;
+    }
+    // for(int i = 0; i < n; i++) {
+    //     cout << "q" << i;
+    //     printVector(listidqueries.get() + i * nprobe, nprobe, GREEN);
+    //     printVector(nodes[1].listidqueries.get() + i * nprobe, nprobe, BLUE);
+    // }
+    // cout << nlist << endl;
+}
+// void Index::single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
+//     // std::cout << BLUE << "simple version of search" << RESET;
+//     //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
+
+//     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe); //搜索最近的聚类中心
+//     std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k); //在聚类中心内部搜
+
+//     std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe); // n个查询向量到nprobe个聚类中心的距离
+//     std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
+//     init_result(metric, n * nprobe, centroid2queries.get(), listidqueries.get()); //优先队列，存储离n个查询向量最近的nprobe个聚类中心
+    
+//     //下面四个向量都和i绑定，也就是和每一个查询绑定
+//     float* disi = distances; //结果，查询向量最近的k个向量的距离
+//     idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
+//     float* centroids2query = centroid2queries.get(); //单个查询对应的距离
+//     idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
+
+//     for (size_t i = 0; i < n; i++) {
+//         //每一个i对应一个查询
+//         scaner_quantizer->set_query(queries + i * d);
+//         scaner->set_query(queries + i * d);
+//         //获取最近的nprobe个聚类中心
+//         scaner_quantizer->lite_scan_codes(nlist,
+//                                           centroid_codes.get(),
+//                                           reinterpret_cast<const size_t*>(centroid_ids.get()),
+//                                           centroids2query, //ret
+//                                           listids); //ret , 分别对应堆
+//         //要查的聚类id存储在listids的前nprobe个
+//         sort_result(metric, nprobe, centroids2query, listids);
+
+//         if (metric == MetricType::METRIC_L2) {
+//             for (size_t j = 0; j < nprobe; j++) {
+//                 //在第j个聚类中搜索所有点
+//                 //list代表聚类
+//                 IVF& list = lists[listids[j]];
+
+//                 //查询点到中心的距离
+//                 float centroid2query = centroids2query[j];
+//                 //聚类中的点的数量
+//                 size_t list_size = list.get_list_size();
+
+//                 size_t scan_begin = 0;
+//                 size_t scan_end = list_size;
+
+//                 scaner->lite_scan_codes(list_size,list.get_candidate_codes(), list.get_candidate_id(), disi, idxi);
+//             }
+//         } 
+//         sort_result(metric, k, disi, idxi);
+//         disi += k;
+//         idxi += k;
+//         centroids2query += nprobe;
+//         listids += nprobe;
+//     }
+// }
 void Index::single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
     //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe); //搜索最近的聚类中心
@@ -671,18 +799,19 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
     float* simi = distances;
     idx_t* idxi = labels;
     float* centroids2query = centroid2queries.get(); //单个查询对应的距离
-    idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
+    idx_t* listids = listidqueries.get();//单个查询对应的IVF聚类中心id
 
     for (size_t i = 0; i < n; i++) {
         //每一个i对应一个查询
         scaner_quantizer->set_query(queries + i * d);
         scaner->set_query(queries + i * d);
-        //获取最近的nprobe个聚类中心
+        //把和nlist个聚类中心计算距离的结果放进centroids2query这个堆里面
         scaner_quantizer->lite_scan_codes(nlist,
                                           centroid_codes.get(),
                                           reinterpret_cast<const size_t*>(centroid_ids.get()),
                                           centroids2query, //ret
                                           listids); //ret , 分别对应两个堆
+        //取前nprobe个聚类中心
         sort_result(metric, nprobe, centroids2query, listids);
 
         if (metric == MetricType::METRIC_L2) {
@@ -787,9 +916,12 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
         centroids2query += nprobe;
         listids += nprobe;
     }
+    
 }
 
-Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, bool simpleVersion) {
+Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, bool blockVersion) {
+    if(blockVersion) 
+        std::cout << BLUE << "simple version of search" << RESET << std::endl;
     if (n == 0) {
         return Stats();
     }
@@ -803,6 +935,10 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     // distance是最终结果，是nq个k维的float向量，每一个float对应着和一个相近向量的距离, labels是对应相近向量的id
     // 在distance内部的每一行，对应着一个查询，将其看作一个容量为k的优先队列
     init_result(metric, n * k, distances, labels);
+    if(blockVersion) {
+        single_thread_search_block(n, queries, k, distances, labels);
+        return Stats();
+    }
     size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), n);
     size_t batch_size = n / nt;
     size_t extra = n % nt;
@@ -821,10 +957,7 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
         }
         if (start < end) {
             //end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k 是结果存放的起始位置
-            if (simpleVersion)
-                single_thread_search_simple(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio, &stats[i]);
-            else
-                single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio, &stats[i]);
+            single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio, &stats[i]);
         }
     }
 

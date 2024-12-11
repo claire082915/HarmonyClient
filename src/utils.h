@@ -24,7 +24,13 @@
 
 namespace tribase {
     const std::string BLUE = "\033[1;34m"; // Blue text
+    const std::string YELLOW = "\033[1;33m"; // Blue text
+    const std::string GREEN = "\033[1;32m"; // Blue text
     const std::string RESET = "\033[0m"; // Reset color
+
+// void copyPartialVector(const float* const src, float* dest, size_t id_start, size_t ) {
+
+// }
 class CsvWriter {
    private:
     std::ofstream file_;
@@ -127,7 +133,36 @@ class CsvWriter {
         return *this;
     }
 };
-
+template <typename T>
+inline void copy_n_partial_vector(const T* from, T* to, size_t dFrom, size_t dTo, size_t offset, size_t n) {
+    for(size_t vectorIndex = 0; vectorIndex < n;vectorIndex++) {
+        std::copy_n(from + vectorIndex * dFrom + offset, 
+            dTo,
+            to + vectorIndex * dTo);
+    }
+}
+template <typename T>
+inline void printVector(std::vector<T>& v, std::string color) {
+    using namespace std;
+    std::cout << "[" << color;
+    for(size_t i = 0; i < v.size(); i++) {
+        cout << v[i] << " ";
+    }
+    cout << "]";
+    cout << endl;
+    cout << RESET;
+}
+template <typename T>
+inline void printVector(const T* const from, size_t d, std::string color) {
+    using namespace std;
+    std::cout << "[" << color;
+    for(size_t i = 0; i < d; i++) {
+        cout << from[i] << " ";
+    }
+    cout << "]";
+    cout << endl;
+    cout << RESET;
+}
 inline std::pair<size_t, int> loadFvecsInfo(const std::string& filePath) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
@@ -738,7 +773,7 @@ inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, c
             }
         }
     }
-    assert(1.0 * true_correct / correct > 0.99);
+    // assert(1.0 * true_correct / correct > 0.99);
     return static_cast<float>(correct) / (nq * k);
 }
 

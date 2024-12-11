@@ -4,6 +4,7 @@ set(SRC_FILES
     Clustering.cpp
     Index.cpp
     IVF.cpp
+    node.cpp
     # utils.cpp
 )
 

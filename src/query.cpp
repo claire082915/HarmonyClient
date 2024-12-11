@@ -15,7 +15,7 @@
 #include "utils.h"
 
 using namespace tribase;
-
+using namespace std;
 bool str_lower_equal(const std::string& a, const std::string& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char a, char b) { return std::tolower(a) == std::tolower(b); });
 }
@@ -41,8 +41,9 @@ int main(int argc, char* argv[]) {
     program.add_argument("--csv").help("csv result file").default_value(std::string(""));
     program.add_argument("--dataset_info").help("only output dataset-info to csv file").default_value(false).implicit_value(true);
     program.add_argument("--early_stop").help("early stop").default_value(false).implicit_value(true);
-    program.add_argument("--simple").help("simple version").default_value(false).implicit_value(true);
+    // program.add_argument("--block").help("simple version").default_value(false).implicit_value(true);
     program.add_argument("--node").help("number of worker nodes").default_value(0ul).action([](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--block").help("number of blocks").default_value(0ul).action([](const std::string& value) -> size_t { return std::stoul(value); });
 
     try {
         program.parse_args(argc, argv);
@@ -75,9 +76,11 @@ int main(int argc, char* argv[]) {
     size_t nlist = program.get<size_t>("nlist");
     bool verbose = program.get<bool>("verbose");
     bool early_stop = program.get<bool>("early_stop");
-    bool simple_version = program.get<bool>("simple");
+    // bool block_version = program.get<bool>("block");
     size_t nodeCount = program.get<size_t>("node");
-    std::cout << BLUE << nodeCount << RESET << std::endl;
+    size_t blockCount = program.get<size_t>("block");
+    bool block_version = blockCount > 0;
+    std::cout << BLUE << "number of nodes : " <<nodeCount << RESET << std::endl;
     if (early_stop && (ratios[0] != 1 || ratios.size() != 1)) {
         throw std::invalid_argument("early_stop is only allowed when ratios is 1.0");
     }
@@ -185,6 +188,10 @@ int main(int argc, char* argv[]) {
     //init query set
     auto [query, nq, _] = loadXvecs(query_path);
 
+    cout << YELLOW << "dim:[" << d << "]" << endl;
+    cout << YELLOW << "Base:[" << nb << "]" << endl;
+    cout << YELLOW << "Query:[" << nq << "]" << endl << RESET;
+    
     //init groundtruth
     std::unique_ptr<idx_t[]> ground_truth_I = std::make_unique<idx_t[]>(k * nq);
     std::unique_ptr<float[]> ground_truth_D = std::make_unique<float[]>(k * nq);
@@ -334,12 +341,8 @@ int main(int argc, char* argv[]) {
         nlist = static_cast<size_t>(std::sqrt(nb));
         index = Index(d, nlist, 0, metric, added_opt_levels, OPT_ALL, sub_nlist, sub_nprobe, verbose);
         index.train(nb, base.get());
-        if(simple_version) {
+        if(block_version) {
             index.add_simple(nb, base.get());
-            if(nodeCount > 0) {
-
-            // index.distribute();
-            }
         } 
         else 
             index.add(nb, base.get());
@@ -356,24 +359,32 @@ int main(int argc, char* argv[]) {
     if (train_only) {
         return 0;
     }
-    auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, bool simpleVersion) {
-        // std::string simple = simpleVersion ? "simple" : "original";
+    auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, bool blockVersion) {
+        // std::string simple = blockVersion ? "simple" : "original";
         // std::string output_path = std::format("{}/{}/result/result_nlist_{}_nprobe_{}_opt_{}_k_{}_ratio_{}_{}.{}",
         //                                               benchmarks_path, dataset, nlist, nprobe, static_cast<int>(opt_level), k, ratio, output_format, simple);
         // result stored in distance , labels
         std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
         std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
+
+        if(blockVersion > 0) {
+            index.initNodes(nodeCount, query.get(), nq, blockCount);
+        }
         if (loop > 1) {
-            index.search(nq, query.get(), k, distances.get(), labels.get(), ratio);
+            index.search(nq, query.get(), k, distances.get(), labels.get(), ratio, blockVersion);
         }
         Stopwatch stopwatch;
         Stats stats;
         for (size_t j = 0; j < loop; j++) {
-            stats = index.search(nq, query.get(), k, distances.get(), labels.get(), ratio);
+            stats = index.search(nq, query.get(), k, distances.get(), labels.get(), ratio, blockVersion);
         }
         float recall = calculate_recall(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
         float r2 = calculate_r2(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
         double search_time = stopwatch.elapsedSeconds() / loop;
+        // for(int i = 0; i < nq; i++) {
+            // std::cout << "Q" << i << " ";
+            // printVector(distances.get() + i * k, k, BLUE);
+        // }
         stats.simi_ratio = ratio;
         stats.nlist = nlist;
         stats.nprobe = nprobe;
@@ -383,7 +394,7 @@ int main(int argc, char* argv[]) {
         stats.recall = recall;
         stats.r2 = r2;
         stats.print();
-        if(simpleVersion)
+        if(blockVersion)
             stats.toCsv(log_path_simple, true, dataset);
         else
             stats.toCsv(log_path, true, dataset);
@@ -400,12 +411,17 @@ int main(int argc, char* argv[]) {
         for (const OptLevel& opt_level : opt_levels) {
             index.opt_level = opt_level;
             for (float ratio : ratios) {
+                if(block_version) {
+                    doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true);
+                }
+                std::cout << YELLOW;
                 doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
-                doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true);
+                std::cout << RESET;
             }
         }
         if (early_stop_flag) {
             break;
         }
     }
+
 }
