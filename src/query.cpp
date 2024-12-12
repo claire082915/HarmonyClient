@@ -23,9 +23,19 @@ bool str_lower_equal(const std::string& a, const std::string& b) {
 
 int workerMain(int rank) {
     cout << "node(" << rank << ") main()" << endl;
+    return 0;
 }
-int masterMain(int argc, char* argv[]) {
-    cout << "master(rank) main()" << endl;
+int main(int argc, char* argv[]) {
+
+    MPI_Init(&argc, &argv);
+
+    // Get the rank (ID) of the current process
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if(rank != 0) {
+        workerMain(rank);
+    } else {
+cout << "master main()" << endl;
     argparse::ArgumentParser program("tribase");
     program.add_argument("--benchmarks_path").help("benchmarks path").default_value(std::string("/home/xuqian/Triangle/benchmarks"));
     program.add_argument("--dataset").help("dataset name").default_value(std::string("msong"));
@@ -85,6 +95,9 @@ int masterMain(int argc, char* argv[]) {
     size_t nodeCount = program.get<size_t>("node");
     size_t blockCount = program.get<size_t>("block");
     bool block_version = blockCount > 0;
+    if(blockCount != 0 && nodeCount == 0 || blockCount == 0 && nodeCount != 0) {
+        throw std::invalid_argument("block count and node cound must be provided at the same time");
+    }
     std::cout << BLUE << "number of nodes : " <<nodeCount << RESET << std::endl;
     if (early_stop && (ratios[0] != 1 || ratios.size() != 1)) {
         throw std::invalid_argument("early_stop is only allowed when ratios is 1.0");
@@ -434,7 +447,7 @@ int masterMain(int argc, char* argv[]) {
                 } 
                 // else {
                     std::cout << YELLOW;
-                    // doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
+                    doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
                     std::cout << RESET;
                 // }
             }
@@ -443,18 +456,6 @@ int masterMain(int argc, char* argv[]) {
             break;
         }
     }
-}
-int main(int argc, char* argv[]) {
-
-    MPI_Init(&argc, &argv);
-
-    // Get the rank (ID) of the current process
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    if(rank != 0) {
-        // workerMain(rank);
-    } else {
-        masterMain(argc, argv);
     }
     MPI_Finalize();
     return 0;
