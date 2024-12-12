@@ -27,10 +27,11 @@ Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel 
     centroid_ids = std::make_unique<idx_t[]>(nlist);
     //centroid_ids初始化为0~nlist-1
     std::iota(centroid_ids.get(), centroid_ids.get() + nlist, 0);
-    
 }
 void Index::preSearch(size_t nb) {
-    distancesForNQuerys = std::make_unique<float[]>(presumeNq * nb);
+    presumeTotalQueryCompareSize = 10000 * nb;
+    distancesForNQuerys = std::make_unique<float[]>(presumeTotalQueryCompareSize);
+    distancesResultBuffer = std::make_unique<float[]>(presumeTotalQueryCompareSize);
 }
 
 Index& Index::operator=(Index&& other) noexcept {
@@ -203,7 +204,7 @@ void Index::single_thread_nearest_cluster_search(size_t n, const float* queries,
         // no need to sort result, because only one result
     }
 }
-void Index::initNodes(size_t nodeCount, const float* querys, size_t querySize, size_t blockCount) {
+void Index::initNodes(size_t nodeCount, const float* querys, size_t querySize, size_t blockCount, size_t nb) {
 
     nodes = std::make_unique<Node[]>(nodeCount + 1);
     this->nodeCount = nodeCount;
@@ -211,7 +212,7 @@ void Index::initNodes(size_t nodeCount, const float* querys, size_t querySize, s
     assert(querySize % blockCount == 0);
 // #pragma omp parallel for
     for(int i = 1; i <= nodeCount; i++) {
-        nodes[i].init(i, d, d / nodeCount, nodeCount, lists.get(), nlist, querys, querySize, blockCount, nprobe);
+        nodes[i].init(i, d, d / nodeCount, nodeCount, lists.get(), nlist, querys, querySize, blockCount, nprobe, nb);
 // #pragma omp parallel for
         std::cout << BLUE << "nodes:" << nodes[i].id << " " << nodes[i].block_dim << RESET << std::endl;
     }
@@ -680,7 +681,6 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
 
     //算出每个查询向量一共要和多少个向量比较
     std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n);
-    // cout << GREEN ;
 #pragma omp parallel for 
     for(size_t q = 0; q < n; q++) {
         for(size_t i = 0; i < nprobe; i++) {
@@ -701,10 +701,6 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     auto clock3 = std::chrono::high_resolution_clock::now();
     std::cout << "queryCompareSizePreSum2:" << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
 
-    // for(size_t q = 0; q < n; q++) {
-    //     cout << queryCompareSizePreSum[q] << " ";
-    // }
-    // cout << RESET << endl;
 
 #pragma omp parallel for
     for(int nodeId = 1; nodeId <= nodeCount; nodeId++) {
@@ -718,8 +714,8 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     auto clock4 = std::chrono::high_resolution_clock::now();
     std::cout << "copy:" << std::chrono::duration<double>(clock4 - clock3).count() << "s" << std::endl;
     
-    if(presumeNq * nb < totalQueryCompareSize) {
-        distancesForNQuerys = std::make_unique<idx_t[]>(totalQueryCompareSize);
+    if(presumeTotalQueryCompareSize < totalQueryCompareSize) {
+        distancesForNQuerys = std::make_unique<float[]>(totalQueryCompareSize);
     }
     auto clock5 = std::chrono::high_resolution_clock::now();
 

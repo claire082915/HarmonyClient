@@ -13,6 +13,7 @@
 #include <faiss/index_io.h>
 #include "tribase.h"
 #include "utils.h"
+#include <mpi.h>
 
 using namespace tribase;
 using namespace std;
@@ -20,7 +21,11 @@ bool str_lower_equal(const std::string& a, const std::string& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char a, char b) { return std::tolower(a) == std::tolower(b); });
 }
 
-int main(int argc, char* argv[]) {
+int workerMain(int rank) {
+    cout << "node(" << rank << ") main()" << endl;
+}
+int masterMain(int argc, char* argv[]) {
+    cout << "master(rank) main()" << endl;
     argparse::ArgumentParser program("tribase");
     program.add_argument("--benchmarks_path").help("benchmarks path").default_value(std::string("/home/xuqian/Triangle/benchmarks"));
     program.add_argument("--dataset").help("dataset name").default_value(std::string("msong"));
@@ -380,7 +385,7 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
 
         if(blockVersion) {
-            index.initNodes(nodeCount, query.get(), nq, blockCount);
+            index.initNodes(nodeCount, query.get(), nq, blockCount, nb);
         }
         if (loop > 1) {
             index.search(nq, query.get(), k, distances.get(), labels.get(), ratio, blockVersion);
@@ -426,16 +431,33 @@ int main(int argc, char* argv[]) {
             for (float ratio : ratios) {
                 if(block_version) {
                     doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true);
-                } else {
+                } 
+                // else {
                     std::cout << YELLOW;
-                    doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
+                    // doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
                     std::cout << RESET;
-                }
+                // }
             }
         }
         if (early_stop_flag) {
             break;
         }
     }
+}
+int main(int argc, char* argv[]) {
+
+    MPI_Init(&argc, &argv);
+
+    // Get the rank (ID) of the current process
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if(rank != 0) {
+        // workerMain(rank);
+    } else {
+        masterMain(argc, argv);
+    }
+    MPI_Finalize();
+    return 0;
+
 
 }

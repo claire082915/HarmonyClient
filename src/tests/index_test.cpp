@@ -30,7 +30,7 @@ TEST(IndexTest, L2NodeTest) {
     Index index(d, nlist, nlist, METRIC_L2, OPT_NONE, 15, 1, 1, false);
     index.train(nb, codes.get());
     index.add_simple(nb, codes.get()); //here
-    index.initNodes(nodeCount, queries.get(), nq, blockCount); //here
+    index.initNodes(nodeCount, queries.get(), nq, blockCount, nb); //here
 
     faiss::IndexFlatL2 quantizer(d);  // the other index
     faiss::IndexIVFFlat index_faiss(&quantizer, d, nlist);
@@ -57,11 +57,11 @@ TEST(IndexTest, L2NodeTest) {
     double time2 = std::chrono::duration_cast<std::chrono::microseconds>(end2 - start2).count() / 1e6;
 
     std::cout << std::format("Time_our:\t{}\nTime_faiss:\t{}\n", time, time2);
-    for(size_t i = 0; i < nq; i++) {
-        std::cout << "Q" << i << " ";
-        printVector(g_dis.get() + i * k, k, BLUE);
-        printVector(dis.get() + i * k, k, BLUE);
-    }
+    // for(size_t i = 0; i < nq; i++) {
+    //     std::cout << "Q" << i << " ";
+    //     printVector(g_dis.get() + i * k, k, BLUE);
+    //     printVector(dis.get() + i * k, k, BLUE);
+    // }
     double recall = calculate_recall(ids.get(), dis.get(), g_ids.get(), g_dis.get(), nq, k, MetricType::METRIC_L2);
     stats.recall = recall;
     stats.print();

@@ -16,6 +16,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 find_package(OpenMP REQUIRED)
 find_package(GTest REQUIRED)
+find_package(MPI REQUIRED)
 
 set(MKL_ROOT "/opt/intel/oneapi/mkl/2024.1")
 include_directories(${MKL_ROOT}/include)
@@ -34,6 +35,9 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
 elseif (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "Standard")
     # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${W_CXX_FLAGS} ${OpenMP_CXX_FLAGS} -Ofast -mavx512f -march=native -mtune=native -DNDEBUG")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${W_CXX_FLAGS} ${OpenMP_CXX_FLAGS} -Ofast -mavx512f -march=native -mtune=native")
+elseif (CMAKE_BUILD_TYPE STREQUAL "MPI")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${W_CXX_FLAGS} ${OpenMP_CXX_FLAGS} -Ofast -mavx512f -march=native -mtune=native")
+    set(CMAKE_CXX_COMPILER ${MPI_CXX_COMPILER})
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
