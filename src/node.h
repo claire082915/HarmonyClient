@@ -83,31 +83,37 @@ public:
             MPI_Bcast(listCodesBuffer[i].get(), listSizes[i] * info.d , MPI_FLOAT, 0, MPI_COMM_WORLD);
         }
         addIVFs(listCodesBuffer);
+        
+        cout << 2 << endl;
 
-        // 3. nq, querys
-        MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
-        std::unique_ptr<float[]> querysBuffer = std::make_unique<float[]>(nq * info.d);
-        MPI_Bcast(querysBuffer.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
-        addQuerys(querysBuffer.get(), nq);
+        // // 3. nq, querys
+        // MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
+        // std::unique_ptr<float[]> querysBuffer = std::make_unique<float[]>(nq * info.d);
+        // MPI_Bcast(querysBuffer.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        // addQuerys(querysBuffer.get(), nq);
+        // cout << 3 << endl;
 
-        // 4. query最近的nprobe个聚类中心的id
-        listidqueries = std::make_unique<idx_t[]>(nq * info.nprobe);  // 最近的nprobe个聚类中心的id
-        MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // // 4. query最近的nprobe个聚类中心的id
+        // listidqueries = std::make_unique<idx_t[]>(nq * info.nprobe);  // 最近的nprobe个聚类中心的id
+        // MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
 
-        // 5. queryCompareSize,queryCompareSizePreSum
-        queryCompareSize = std::make_unique<size_t[]>(nq);
-        MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
-        queryCompareSizePreSum = std::make_unique<size_t[]>(nq + 1);
-        MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // cout << nq << endl;
+        // // 5. queryCompareSize,queryCompareSizePreSum
+        // queryCompareSize = std::make_unique<size_t[]>(nq);
+        // MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // cout << "ha" << endl;
+        // queryCompareSizePreSum = std::make_unique<size_t[]>(nq + 1);
+        // MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // cout << 5 << endl;
 
-        // 6.其他初始化
-        blockSize = nq / info.blockCount;
-        blockDistancesSize = blockSize * info.nb;
-        distancesForBlocks = vector<std::unique_ptr<float[]>>(blockDistancesSize);
-        for (size_t i = 0; i < info.blockCount; i++) {
-            distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
-        }
-        // cout << CRAN << "finish init" << rank << RESET << endl;
+        // // 6.其他初始化
+        // blockSize = nq / info.blockCount;
+        // blockDistancesSize = blockSize * info.nb;
+        // distancesForBlocks = vector<std::unique_ptr<float[]>>(blockDistancesSize);
+        // for (size_t i = 0; i < info.blockCount; i++) {
+        //     distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
+        // }
+        // // cout << CRAN << "finish init" << rank << RESET << endl;
     }
     void preSearchInit() {}
     // void init(size_t id, size_t d, size_t block_dim, size_t nodeCount, IVF* ivfs, size_t nlist, const float* querys,
@@ -216,8 +222,8 @@ public:
 
         // malloc0.3s, search0.9s
         auto clock2 = std::chrono::high_resolution_clock::now();
-        std::cout << "node" << rank << '|' << blockId << "| search"
-        << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
+        // std::cout << "node" << rank << '|' << blockId << "| search"
+        // << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
         resultInfo = SearchResultInfo(totalQueryCompareSize, blockId);
         auto clock3 = std::chrono::high_resolution_clock::now();
         MPI_Send(&resultInfo, sizeof(SearchResultInfo), MPI_BYTE, 0, SearchResultTag::INFO, MPI_COMM_WORLD);

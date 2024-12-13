@@ -42,11 +42,12 @@ Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel 
     //centroid_ids初始化为0~nlist-1
     std::iota(centroid_ids.get(), centroid_ids.get() + nlist, 0);
 }
-void Index::initWorkers(size_t workerCount, float* querys, size_t nq, size_t blockCount, size_t nb) {
+void Index::preSearch(size_t nb, size_t blockCount, size_t workerCount) {
+
     MyStopWatch watch;
     this->workerCount = workerCount;
     this->blockCount = blockCount;
-    this->blockSize = nq / blockCount;
+    // this->blockSize = nq / blockCount;
     assert(d % workerCount == 0);
     assert(nq % blockCount == 0);
     Worker::InitInfo info = Worker::InitInfo(d, d / workerCount, workerCount, nlist, blockCount, nprobe, nb);
@@ -69,11 +70,15 @@ void Index::initWorkers(size_t workerCount, float* querys, size_t nq, size_t blo
     watch.print("listSizes, listCodes");
     // printVector(listSizes.get(), nlist, YELLOW);
     // cout << "finish initWorkers" << endl;
-}
-void Index::preSearch(size_t nb) {
+
     presumeTotalQueryCompareSize = 10000 * nb;
     distancesForNQuerys = std::make_unique<float[]>(presumeTotalQueryCompareSize);
     distancesResultBuffer = std::make_unique<float[]>(presumeTotalQueryCompareSize);
+    blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount); 
+    for(size_t i = 0; i < blockCount; i++) {
+        blockDistancesBuffer[i] = std::make_unique<float[]>(presumeTotalQueryCompareSize / blockCount);
+    }
+    watch.print("pre malloc");
 }
 
 Index& Index::operator=(Index&& other) noexcept {
@@ -684,9 +689,11 @@ std::unique_ptr<idx_t[]> Index::findNearNprobeOfCentroidIds(size_t n, const floa
 }
 
 void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
+    blockSize = n / blockCount;
     printIndex();
     MyStopWatch watch;
     std::cout << GREEN << "block search" << RESET << std::endl;
+
     //n个查询向量对应的nprobe个聚类中心id
     std::unique_ptr<idx_t[]> listidqueries = findNearNprobeOfCentroidIds(n, queries);
     watch.print("findNearNprobeOfCentroidIds");
@@ -724,7 +731,7 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     //4.listidqueries 
     MPI_Bcast(listidqueries.get(), n * nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
     //5.queryCompareSize
-    MPI_Bcast(queryCompareSize.get(), n, MPI_INT64_T, 0, MPI_COMM_WORLD);
+    // MPI_Bcast(queryCompareSize.get(), n, MPI_INT64_T, 0, MPI_COMM_WORLD);
     //6.queryCompareSizePreSum
     MPI_Bcast(queryCompareSizePreSum.get(), (n + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
 
@@ -732,21 +739,14 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
 
     if(presumeTotalQueryCompareSize < totalQueryCompareSize) {
         distancesForNQuerys = std::make_unique<float[]>(totalQueryCompareSize);
+        for(size_t i = 0; i < blockCount; i++) {
+            blockDistancesBuffer[i] = std::make_unique<float[]>(queryCompareSizeForBlocks[i]);
+        }
     }
     watch.print("might malloc distancesForNquerys");
 
     //计算每一个block中查询向量比较的个数
     
-    // printVector(queryCompareSizeForBlocks.get(), blockCount, YELLOW);
-    
-    //利用tag，先接受长度，再接受结果数组
-
-    // std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n); 
-    auto blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount); 
-    for(size_t i = 0; i < blockCount; i++) {
-        blockDistancesBuffer[i] = std::make_unique<float[]>(queryCompareSizeForBlocks[i]);
-    }
-    watch.print("malloc blockBuffer");
 
     MPI_Status status;
     Worker::SearchResultInfo resultInfo; 
@@ -814,6 +814,8 @@ void Index::printIndex() {
     cout << ",nlist:" << nlist;
     cout << ",nprobe:" << nprobe;
     cout << ",node:" << workerCount;
+    cout << ",blockCount:" << blockCount;
+    cout << ",blockSize:" << blockSize;
     cout << endl;
 }
 // void Index::single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
