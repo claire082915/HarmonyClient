@@ -273,6 +273,7 @@ int main(int argc, char* argv[]) {
             double blockResultSize = (double)nq / blockCount * nb;
             if(blockResultSize > INT_MAX) {
                 cerr << RED << "blockResultSize" << blockResultSize << ", too few blocks" << RESET <<endl;
+                return 1;
             }
         }
 
