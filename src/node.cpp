@@ -2,7 +2,7 @@
 namespace tribase {
 
 void Worker::addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer) {
-    assert(rank != 0 && block_dim != 0);
+    assert(rank != 0 && info.block_dim != 0);
 
     listCodes = vector<std::unique_ptr<float[]>>(info.nlist);
     // #pragma omp parallel for

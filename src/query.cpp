@@ -38,7 +38,7 @@ int workerMain(int rank) {
 int main(int argc, char* argv[]) {
     int pro;
     // MPI_Init(&argc, &argv);
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_SINGLE, &pro);
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &pro);
     
 
     // Get the rank (ID) of the current process
@@ -263,12 +263,16 @@ int main(int argc, char* argv[]) {
         cout << YELLOW << "Query:[" << nq << "]" << endl << RESET;
         if (block_version) {
             if (d % workerCount != 0) {
-                cerr << "Error: d % node must be 0" << endl;
+                cerr << RED << "Error: d % node must be 0" << RESET << endl;
                 return 1;
             }
             if (nq % blockCount != 0) {
-                cerr << "Error: nq % block must be 0" << endl;
+                cerr << RED << "Error: nq % block must be 0" << RESET << endl;
                 return 1;
+            }
+            double blockResultSize = (double)nq / blockCount * nb;
+            if(blockResultSize > INT_MAX) {
+                cerr << RED << "blockResultSize" << blockResultSize << ", too few blocks" << RESET <<endl;
             }
         }
 
