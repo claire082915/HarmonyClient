@@ -38,7 +38,7 @@ class Index {
     void save_index(std::string path) const;
     void load_index(std::string path);
     void load_SPANN(std::string path);
-    void initNodes(size_t nodeCount, const float* querys, size_t querySize, size_t blockCount, size_t nb);
+    void initWorkers(size_t workerCount, float* querys, size_t querySize, size_t blockCount, size_t nb);
     void printIndex();
     void preSearch(size_t nb);
     // 其他查询方法的声明
@@ -50,7 +50,9 @@ class Index {
     size_t d;
     size_t nlist;
     size_t nprobe;
-    size_t nodeCount;
+    size_t workerCount;
+    size_t blockCount;
+    size_t blockSize;
     MetricType metric;
     OptLevel opt_level;
     OptLevel added_opt_level;
@@ -65,10 +67,11 @@ class Index {
     std::unique_ptr<IVF[]> lists; //代表所有聚类，id为index,IVF是一个聚类
     std::unique_ptr<float[]> centroid_codes; //聚类中心向量表示
     std::unique_ptr<idx_t[]> centroid_ids; //聚类中心id，通常是1,2,3,...
-    std::unique_ptr<tribase::Node[]> nodes; 
+    // std::unique_ptr<tribase::Node[]> nodes; 
     std::unique_ptr<float[]> distancesForNQuerys;
     size_t presumeTotalQueryCompareSize = 0;
     std::unique_ptr<float[]> distancesResultBuffer;
+
 };
 
 }  // namespace tribase

@@ -30,7 +30,7 @@ TEST(IndexTest, L2NodeTest) {
     Index index(d, nlist, nlist, METRIC_L2, OPT_NONE, 15, 1, 1, false);
     index.train(nb, codes.get());
     index.add_simple(nb, codes.get()); //here
-    index.initNodes(nodeCount, queries.get(), nq, blockCount, nb); //here
+    index.initWorkers(nodeCount, queries.get(), nq, blockCount, nb); //here
 
     faiss::IndexFlatL2 quantizer(d);  // the other index
     faiss::IndexIVFFlat index_faiss(&quantizer, d, nlist);

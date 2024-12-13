@@ -1,18 +1,17 @@
 #include "node.h"
 namespace tribase {
 
-void Node::addIVFs(IVF* ivfs, size_t ivfCnt) {
+void Worker::addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer) {
+    assert(rank != 0 && block_dim != 0);
 
-        assert(id != 0 && block_dim != 0);
-
-        this->ivfs = std::make_unique<IVF[]>(ivfCnt);
-// #pragma omp parallel for
-        for (size_t i = 0; i < ivfCnt; i++) {
-            // cout << ivfs[i].d << endl;
-            this->ivfs[i].reset(ivfs[i].get_list_size(), block_dim, 0);
-// #pragma omp parallel for
-            copy_n_partial_vector(ivfs[i].candidate_codes.get(), this->ivfs[i].candidate_codes.get(), d, block_dim, (id - 1) * block_dim, ivfs[i].get_list_size());
-        }
-
+    listCodes = vector<std::unique_ptr<float[]>>(info.nlist);
+    // #pragma omp parallel for
+    for (size_t i = 0; i < info.nlist; i++) {
+        this->listCodes[i] = std::make_unique<float[]>(listSizes[i] * info.d);
+        copy_n_partial_vector(listCodesBuffer[i].get(), this->listCodes[i].get(), info.d, info.block_dim,
+                              (rank - 1) * info.block_dim, listSizes[i]);
+        // cout << rank << " " << i <<" ";
+        // printVector(listCodes[i].get(), info.block_dim, BLUE);
+    }
 }
-}
+}  // namespace tribase

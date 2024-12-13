@@ -26,7 +26,10 @@ namespace tribase {
     const std::string BLUE = "\033[1;34m"; // Blue text
     const std::string YELLOW = "\033[1;33m"; // Blue text
     const std::string GREEN = "\033[1;32m"; // Blue text
+    const std::string CRAN = "\033[1;36m"; // Blue text
+    const std::string RED = "\033[1;31m"; // Blue text
     const std::string RESET = "\033[0m"; // Reset color
+
 
 // void copyPartialVector(const float* const src, float* dest, size_t id_start, size_t ) {
 
@@ -721,6 +724,10 @@ inline float relative_error(float x, float y) {
 #define FEPS 1e-4
 
 inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k, MetricType metric, size_t gt_k = 0) {
+    if(D[0] < 0) {
+        std::cout << RED << "negative Distance " << RESET << std::endl;
+        return 0;
+    }
     if (gt_k == 0) {
         gt_k = k;
     }
