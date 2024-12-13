@@ -38,8 +38,9 @@ class Index {
     void save_index(std::string path) const;
     void load_index(std::string path);
     void load_SPANN(std::string path);
+    void initWorkers(size_t workerCount, float* querys, size_t querySize, size_t blockCount, size_t nb);
     void printIndex();
-    void preSearch(size_t nb, size_t blockCount, size_t workerCount);
+    void preSearch(size_t nb);
     // 其他查询方法的声明
 
    private:
@@ -70,7 +71,6 @@ class Index {
     std::unique_ptr<float[]> distancesForNQuerys;
     size_t presumeTotalQueryCompareSize = 0;
     std::unique_ptr<float[]> distancesResultBuffer;
-    std::vector<unique_ptr<float[]>> blockDistancesBuffer;
 
 };
 

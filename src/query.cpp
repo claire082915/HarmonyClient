@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &workerCount);  
     workerCount--;
     
-    // cout << "pro" << pro << endl;
+    cout << "pro" << pro << endl;
     cout << "maxnt" << omp_get_max_threads() << endl;
     if (rank != 0) {
         workerMain(rank);
@@ -451,9 +451,7 @@ int main(int argc, char* argv[]) {
         if (train_only) {
             return 0;
         }
-        // if (block_version) {
-        //     index.preSearch(nb, blockCount, workerCount);
-        // }
+        index.preSearch(nb);
         auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time,
                             bool blockVersion) {
             // std::string simple = blockVersion ? "simple" : "original";
@@ -465,10 +463,10 @@ int main(int argc, char* argv[]) {
             // result stored in distance , labels
             std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
             std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
-            if (blockVersion) {
-                index.preSearch(nb, blockCount, workerCount);
-            }
 
+            if (blockVersion) {
+                index.initWorkers(workerCount, query.get(), nq, blockCount, nb);
+            }
             if (loop > 1) {
                 index.search(nq, query.get(), k, distances.get(), labels.get(), ratio, blockVersion);
             }
