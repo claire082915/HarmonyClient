@@ -28,11 +28,13 @@ bool str_lower_equal(const std::string& a, const std::string& b) {
 int workerMain(int rank) {
     // cout << "node(" << rank << ") main()" << endl;
     // MPI_Bcast(data.data(), array_size, MPI_INT, 0, MPI_COMM_WORLD);
+    
     Worker node;
     node.init(rank);
-    for(size_t i = 0; i < node.info.blockCount; i++) {
-        node.search(i);
-    }
+    node.search();
+    // for(size_t i = 0; i < node.info.blockCount; i++) {
+        // node.search(i);
+    // }
     return 0;
 }
 int main(int argc, char* argv[]) {
@@ -52,6 +54,8 @@ int main(int argc, char* argv[]) {
     if (rank != 0) {
         workerMain(rank);
     } else {
+        MPI_Comm master_comm;
+        MPI_Comm_split(MPI_COMM_WORLD, 2, rank, &master_comm);
         cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
         argparse::ArgumentParser program("tribase");
         program.add_argument("--benchmarks_path")
@@ -99,12 +103,24 @@ int main(int argc, char* argv[]) {
             .implicit_value(true);
         program.add_argument("--early_stop").help("early stop").default_value(false).implicit_value(true);
         // program.add_argument("--block").help("simple version").default_value(false).implicit_value(true);
-        program.add_argument("--node")
-            .help("number of worker nodes")
-            .default_value(0ul)
-            .action([](const std::string& value) -> size_t { return std::stoul(value); });
+        // program.add_argument("--node")
+        //     .help("number of worker nodes")
+        //     .default_value(0ul)
+        //     .action([](const std::string& value) -> size_t { return std::stoul(value); });
         program.add_argument("--block")
             .help("number of blocks")
+            .default_value(0ul)
+            .action([](const std::string& value) -> size_t { return std::stoul(value); });
+        program.add_argument("--sync")
+            .help("sync after block search")
+            .default_value(false)
+            .implicit_value(true);
+        program.add_argument("--warmup_list_size")
+            .help("warmup nlist size")
+            .default_value(0ul)
+            .action([](const std::string& value) -> size_t { return std::stoul(value); });
+        program.add_argument("--warmup_list")
+            .help("warmup nlist")
             .default_value(0ul)
             .action([](const std::string& value) -> size_t { return std::stoul(value); });
 
@@ -142,6 +158,10 @@ int main(int argc, char* argv[]) {
         // bool block_version = program.get<bool>("block");
         // size_t nodeCount = program.get<size_t>("node");
         size_t blockCount = program.get<size_t>("block");
+        bool sync = program.get<bool>("sync");
+
+        
+
         bool block_version = blockCount > 0;
         if (blockCount != 0 && workerCount == 0 || blockCount == 0 && workerCount != 0) {
             throw std::invalid_argument("block count and node cound must be provided at the same time");
@@ -210,9 +230,33 @@ int main(int argc, char* argv[]) {
         if (nlist == 0) {
             nlist = static_cast<size_t>(std::sqrt(nb));
         }
+        size_t warmUpSearchList = program.get<size_t>("warmup_list"); 
+        size_t warmUpSearchListSize = program.get<size_t>("warmup_list_size"); 
+        if(warmUpSearchList > 0 && warmUpSearchListSize == 0) {
+            cout << RED << "set warmupSearchListSize to k" << RESET << endl;
+            warmUpSearchListSize = k;
+        }
+        // size_t warmUpSearchListSize;
+        // if(!program.present("--warmup_list_size")) {
+        //     warmUpSearchListSize = k;
+        // } else {
+        //     warmUpSearchListSize = program.get<size_t>("--warmup_list_size"); 
+        // }
+        // size_t warmUpSearchNb;
+        // if(program.present("--warmup")) {
+        //     warmUpSearchNb = program.get<size_t>("warmup"); 
+        // } else {
+        //     size_t bigger = max(k, nlist);
+        //     if(bigger % nlist == 0) {
+        //         warmUpSearchNb = bigger;
+        //     } else {
+        //         warmUpSearchNb = (bigger / nlist + 1) * nlist;
+        //     }
+        // }
         if (nprobes.back() == 0) {
             nprobes.back() = nlist;
         }
+
         size_t sub_nlist = std::sqrt(nb / nlist);
         size_t sub_nprobe = std::max(static_cast<size_t>(sub_nlist * sub_nprobe_ratio), 1ul);
         if (verbose) {
@@ -258,9 +302,9 @@ int main(int argc, char* argv[]) {
         // init query set
         auto [query, nq, _] = loadXvecs(query_path);
 
-        cout << YELLOW << "dim:[" << d << "]" << endl;
-        cout << YELLOW << "Base:[" << nb << "]" << endl;
-        cout << YELLOW << "Query:[" << nq << "]" << endl << RESET;
+
+        cout << YELLOW << std::format("[dim:{}, nb:{}, nq:{}, k:{}]", d, nb, nq, k) << RESET << endl; 
+
         if (block_version) {
             if (d % workerCount != 0) {
                 cerr << RED << "Error: d % node must be 0" << RESET << endl;
@@ -465,7 +509,7 @@ int main(int argc, char* argv[]) {
 
             if (blockVersion) {
                 // index.initWorkers(workerCount, query.get(), nq, blockCount, nb);
-                index.preSearch(nb, workerCount, blockCount);
+                index.preSearch(nb, workerCount, blockCount, sync, warmUpSearchList, warmUpSearchListSize);
             }
             if (loop > 1) {
                 index.search(nq, query.get(), k, distances.get(), labels.get(), ratio, blockVersion);

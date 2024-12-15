@@ -40,10 +40,11 @@ class Index {
     void load_SPANN(std::string path);
     // void initWorkers(size_t workerCount, float* querys, size_t querySize, size_t blockCount, size_t nb);
     void printIndex();
-    void preSearch(size_t nb, size_t workerCount, size_t blockCount);
+    void preSearch(size_t nb, size_t workerCount, size_t blockCount, bool sync, size_t warmUpSearchList, size_t warmUpSearchListSize);
     // 其他查询方法的声明
 
    private:
+    void warmUpSearch(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, idx_t* listidqueries);
     std::unique_ptr<IVFScanBase> get_scanner(MetricType metric, OptLevel opt_level, size_t k, EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
       std::unique_ptr<idx_t[]> findNearNprobeOfCentroidIds(size_t n, const float* queries);
    public:
@@ -72,6 +73,9 @@ class Index {
     size_t presumeTotalQueryCompareSize = 0;
     std::unique_ptr<float[]> distancesResultBuffer;
     std::vector<std::unique_ptr<float[]>> blockDistancesBuffer;
+    std::vector<vector<idx_t>> workerSearchBlockOrder; //每一个worker对应的计算block的id排序
+    size_t warmUpSearchList = 0;
+    size_t warmUpSearchListSize = 0;
 
 };
 

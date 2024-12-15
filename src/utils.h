@@ -34,6 +34,7 @@ namespace tribase {
 // void copyPartialVector(const float* const src, float* dest, size_t id_start, size_t ) {
 
 // }
+
 class CsvWriter {
    private:
     std::ofstream file_;

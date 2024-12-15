@@ -1,70 +1,53 @@
-[lichengqi@localhost VectorDB]$ ./release/bin/query --benchmarks_path ./benchmarks --dataset msong   --opt_levels OPT_NONE   --nprobes 500  --block 4 --node 4  --cache  
-number of nodes : 4
-dim:[420]
-Base:[994185]
-Query:[1000]
-nodes:1 105
-nodes:2 105
-nodes:3 105
-nodes:4 105
-block version of search
-Index:[d:420,nlist:997,nprobe:500,node:4
-block search
-findNearNprobeOfCentroidIds:0.676637s
-queryCompareSize:0.000137225s
-queryCompareSizePreSum2:1.7871e-05s
-copy:0.00169186s
-idsForNQuerys:1.21838s
-0 250 0 159260193
-node1|0| malloc0.100664s
-node1|0| search0.523312s
-1 250 250 160887488
-node1|1| malloc0.10039s
-node1|1| search0.508099s
-2 250 500 162150364
-node1|2| malloc0.0986918s
-node1|2| search0.516903s
-3 250 750 160792545
-node1|3| malloc0.0987443s
-node1|3| search0.513889s
-0 250 0 159260193
-node2|0| malloc0.0974872s
-node2|0| search0.523878s
-1 250 250 160887488
-node2|1| malloc0.0973903s
-node2|1| search0.446358s
-2 250 500 162150364
-node2|2| malloc0.0982391s
-node2|2| search0.39799s
-3 250 750 160792545
-node2|3| malloc0.0974509s
-node2|3| search0.394042s
-0 250 0 159260193
-node3|0| malloc0.0968497s
-node3|0| search0.448787s
-1 250 250 160887488
-node3|1| malloc0.0977252s
-node3|1| search0.412595s
-2 250 500 162150364
-node3|2| malloc0.0981497s
-node3|2| search0.412951s
-3 250 750 160792545
-node3|3| malloc0.0977725s
-node3|3| search0.427943s
-0 250 0 159260193
-node4|0| malloc0.097773s
-node4|0| search0.440796s
-1 250 250 160887488
-node4|1| malloc0.0976099s
-node4|1| search0.402506s
-2 250 500 162150364
-node4|2| malloc0.0980323s
-node4|2| search0.409477s
-3 250 750 160792545
-node4|3| malloc0.0985746s
-node4|3| search0.400764s
-search:9.03269s
-heap:0.0269425s
-nprobe:500 opt_level: 0 simi_ratio: 1
-time_speedup: 55.39% pruning_speedup: 0.00% faiss_query_time: 6.081421 query_time: 10.979144
-recall: 0.999180018901825 r2: 2.9802322387695312e-06
+[1;36mmaster main, node count: 4[0m
+[1;34mnumber of nodes : 4[0m
+[1;31m0[0m
+[1;33mdim:[128]
+[1;33mBase:[10000]
+[1;33mQuery:[100]
+[0m[1;34mblock version of search[0m
+[1;32mIndex:[d:128,nlist:100,nprobe:100,node:4
+[1;32mblock search[0m
+[1;32m[StopWatch:   findNearNprobeOfCentroidIds]:0.0159552s[0m
+[1;32m[StopWatch:              queryCompareSize]:0.0172964s[0m
+[1;32m[StopWatch:                     nq,querys]:0.000127811s[0m
+[1;32m[StopWatch:    BroadCast queryCompareSize]:0.000121137s[0m
+[1;32m[StopWatch:might malloc distancesForNquerys]:7.704e-06s[0m
+[1;31m3[0m
+[[1;34m0 1 ]
+[1;31m2[0m
+[[1;34m0 1 ]
+[1;31m4[0m
+[1;31m1[0m
+[[1;34m0 1 ]
+[[1;34m0 1 ]
+[0mnode2|0| search0.0275259s
+[0mnode4|0| search0.0342911s
+[0mnode1|0| search0.0343497s
+node1|0| send2.4107e-05s
+[0mnode3|0| search0.0345519s
+node2|0| send3.9028e-05s
+node1|1| search0.0275403s
+node3|0| send5.0093e-05s
+node2|1| search0.0194815s
+node3|1| search0.0132632s
+node4|0| send2.6138e-05s
+node4|1| search0.00898601s
+node1|1| send1.5602e-05s
+[1;36mreturn node:1[0m
+node2|1| send1.1225e-05s
+[1;36mreturn node:2[0m
+node3|1| send9.598e-06s
+[1;36mreturn node:3[0m
+node4|1| send1.1305e-05s
+[1;36mreturn node:4[0m
+[1;32m[StopWatch:                   searchblock]:0.156023s[0m
+[1;32m[StopWatch:                          heap]:0.0132888s[0m
+[1;36mfinish search[0m
+nprobe:100 opt_level: 0 simi_ratio: 1
+time_speedup: 11.13% pruning_speedup: 0.00% faiss_query_time: 0.025839 query_time: 0.232116
+recall: 1 r2: 0
+[1;33m[1;33moriginal version of search
+nprobe:100 opt_level: 0 simi_ratio: 1
+time_speedup: 71.81% pruning_speedup: 0.00% faiss_query_time: 0.025839 query_time: 0.035983
+recall: 1 r2: 0
+[0m[1;36mreturn node:0[0m

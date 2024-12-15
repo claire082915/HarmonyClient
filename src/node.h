@@ -21,16 +21,19 @@ public:
         size_t d, block_dim, workerCount;
         size_t nlist;
         size_t blockCount, nprobe, nb;
+        bool sync;
         InitInfo(size_t d, size_t block_dim, size_t workerCount, size_t nlist, size_t blockCount, size_t nprobe,
-                 size_t nb)
+                 size_t nb, bool sync)
             : d(d),
               block_dim(block_dim),
               workerCount(workerCount),
               nlist(nlist),
               blockCount(blockCount),
               nprobe(nprobe),
-              nb(nb) {}
-        InitInfo() : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0) {}
+              nb(nb),
+              sync(sync)
+              {}
+        InitInfo() : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0), sync(true) {}
         void print() {
             cout << GREEN << "InitInfo:[";
             cout << "d:" << d;
@@ -53,6 +56,7 @@ public:
     vector<std::unique_ptr<float[]>> listCodes;  // nlist个聚类的向量数
     std::unique_ptr<float[]> querys;             // nq个查询向量, 维度是block_dim
     // std::unique_ptr<SearchBlock[]> blocks;       // 按照搜索顺序排列，第1个先搜索
+    std::unique_ptr<idx_t[]> blockSearchOrder;   // search block的顺序，第i个元素是第i个要进行search的blockId
     std::unique_ptr<idx_t[]> listidqueries;      // nq * nprobe 查询向量相近的聚类id
     std::unique_ptr<size_t[]> queryCompareSize;  // nq * nprobe 查询向量相近的聚类id
     // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
@@ -65,14 +69,18 @@ public:
 
     void addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer);
 
+    MPI_Comm worker_comm;
+
     void init(int rank) {
+        MPI_Comm_split(MPI_COMM_WORLD, 1, rank, &worker_comm);
+
+        // Synchronize only the worker processes at the barrier
+
         // cout << CRAN << "start init" << rank << RESET << endl;
         this->rank = rank;
 
         // 1. InitInfo
         MPI_Bcast(&info, sizeof(InitInfo), MPI_BYTE, 0, MPI_COMM_WORLD);
-        // info.print();
-
 
         // 2. IVF的大小，IVF的向量表示
         listSizes = std::make_unique<size_t[]>(info.nlist);
@@ -108,37 +116,13 @@ public:
             distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
         }
         // cout << CRAN << "finish init" << rank << RESET << endl;
+        blockSearchOrder = std::make_unique<idx_t[]>(info.blockCount);   // search block的顺序，第i个元素是第i个要进行search的blockId
+        MPI_Recv(blockSearchOrder.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        // cout << RED << rank << RESET << endl;
+        // printVector(blockSearchOrder.get(), info.blockCount, BLUE);
     }
     void preSearchInit() {}
-    // void init(size_t id, size_t d, size_t block_dim, size_t nodeCount, IVF* ivfs, size_t nlist, const float* querys,
-    //           size_t querySize, size_t blockCount, size_t nprobe, size_t nb) {
-    //     this->rank = id;
-    //     if (nprobe > nlist) {
-    //         nprobe = nlist;
-    //     }
-    //     this->nprobe = nprobe;
-    //     this->d = d;
-    //     this->block_dim = block_dim;
-    //     this->blockSize = querySize / blockCount;
-    //     this->blockCount = blockCount;
-    //     addIVFs(ivfs, nlist);
-    //     addQuerys(querys, querySize);
-    //     initBlock();
-
-    //     // 初始化distancesForBlocks
-    //     //  cout << GREEN << "alloc" << blockDistancesSize  << " " << blockCount << RESET << endl;
-    //     blockDistancesSize = blockSize * nb;
-    //     distancesForBlocks = vector<std::unique_ptr<float[]>>(blockDistancesSize);
-    //     for (size_t i = 0; i < blockCount; i++) {
-    //         distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
-    //     }
-    // }
-    // void initBlock() {
-    //     blocks = std::make_unique<SearchBlock[]>(blockCount);
-    //     for (int i = 0; i < blockCount; i++) {
-    //         blocks[i].blockId = i;  // 先按顺序排布
-    //     }
-    // }
+   
     void addQuerys(const float* querys, size_t nq) {
         this->querys = std::make_unique<float[]>(nq * info.block_dim);
         copy_n_partial_vector(querys, this->querys.get(), info.d, info.block_dim, info.block_dim * (rank - 1), nq);
@@ -162,13 +146,25 @@ public:
     };
     SearchResultInfo resultInfo;
 
-    void search(size_t blockId) {
-        //         cout << BLUE << "alloc" << blockDistancesSize << " " << distancesForBlocks.size() << RESET << endl;
+    void search() {
+        if(info.sync) {
+            cout << YELLOW << "Sync On" << RESET << endl;
+        } else {
+            // cout << YELLOW << "Sync Off" << RESET << endl;
+        }
+        for (size_t i = 0; i < info.blockCount; i++) {
+            idx_t blockId = blockSearchOrder[i];
+            searchBlock(blockId);
+            if(info.sync) {
+                MPI_Barrier(worker_comm);
+            }
+        }
+    }
+    void searchBlock(size_t blockId) {
 
         auto clock1 = std::chrono::high_resolution_clock::now();
 
         size_t queryStart = blockId * blockSize;
-        // size_t totalQueryCompareSize = 0;
         size_t totalQueryCompareSize =
             queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
         // cout << RED << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET

@@ -1,15 +1,18 @@
 #include "Index.h"
+
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexIVFFlat.h>
 #include <omp.h>
+
 #include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <vector>
+
 #include "IVF.h"
 #include "IVFScan.hpp"
 #include "heap.hpp"
-#include <vector>
 
 #define SUB_LIST_SIZE 8ul
 #define IP_SUB_RATIO 1.5
@@ -19,56 +22,64 @@
 namespace tribase {
 
 class MyStopWatch {
-    public:
+public:
     Stopwatch watch;
     bool shouldPrint;
-    MyStopWatch(bool shouldPrint = true) : shouldPrint(shouldPrint){
-        watch.reset();
-    }
-    
+    MyStopWatch(bool shouldPrint = true) : shouldPrint(shouldPrint) { watch.reset(); }
+
     void print(std::string s) {
-        if(!shouldPrint) {
+        if (!shouldPrint) {
             return;
         }
         double time = watch.elapsedSeconds(true);
-        std::cout << GREEN <<  "[StopWatch:" << std::setw(30) << s << "]:" <<  time << 's' << RESET << std::endl;
+        std::cout << GREEN << "[StopWatch:" << std::setw(30) << s << "]:" << time << 's' << RESET << std::endl;
     }
-
 };
 
-Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel opt_level, size_t sub_k, size_t sub_nlist, size_t sub_nprobe, bool verbose, EdgeDevice edge_device_enabled)
-    : d(d), nlist(nlist), nprobe(nprobe), metric(metric), opt_level(opt_level), sub_k(sub_k), sub_nlist(sub_nlist), sub_nprobe(sub_nprobe), verbose(verbose), edge_device_enabled(edge_device_enabled) {
-    //nlist个聚类，IVF是一个聚类里面的所有点
+Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel opt_level, size_t sub_k,
+             size_t sub_nlist, size_t sub_nprobe, bool verbose, EdgeDevice edge_device_enabled)
+    : d(d),
+      nlist(nlist),
+      nprobe(nprobe),
+      metric(metric),
+      opt_level(opt_level),
+      sub_k(sub_k),
+      sub_nlist(sub_nlist),
+      sub_nprobe(sub_nprobe),
+      verbose(verbose),
+      edge_device_enabled(edge_device_enabled) {
+    // nlist个聚类，IVF是一个聚类里面的所有点
     lists = std::make_unique<IVF[]>(nlist);
-    //code是向量，nlist个向量，每个向量d维
+    // code是向量，nlist个向量，每个向量d维
     centroid_codes = std::make_unique<float[]>(nlist * d);
     centroid_ids = std::make_unique<idx_t[]>(nlist);
-    //centroid_ids初始化为0~nlist-1
+    // centroid_ids初始化为0~nlist-1
     std::iota(centroid_ids.get(), centroid_ids.get() + nlist, 0);
 }
 // void Index::initWorkers(size_t workerCount, float* querys, size_t nq, size_t blockCount, size_t nb) {
 
 // }
-void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount) {
-
-    MyStopWatch watch(false);
+void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool sync, size_t warmUpSearchList, size_t warmUpSearchListSize) {
+    MyStopWatch watch(true);
     this->workerCount = workerCount;
     this->blockCount = blockCount;
+    this->warmUpSearchList = warmUpSearchList;
+    this->warmUpSearchListSize = warmUpSearchListSize;
     assert(d % workerCount == 0);
     // assert(nq % blockCount == 0);
-    Worker::InitInfo info = Worker::InitInfo(d, d / workerCount, workerCount, nlist, blockCount, nprobe, nb);
+    Worker::InitInfo info = Worker::InitInfo(d, d / workerCount, workerCount, nlist, blockCount, nprobe, nb, sync);
     // 1. Info
     MPI_Bcast(&info, sizeof(Worker::InitInfo), MPI_BYTE, 0, MPI_COMM_WORLD);
     watch.print("Info");
 
     // 2. listSizes, listCodes
-    auto listSizes = std::make_unique<size_t[]>(nlist); 
-    for(size_t listId = 0; listId < nlist; listId++) {
+    auto listSizes = std::make_unique<size_t[]>(nlist);
+    for (size_t listId = 0; listId < nlist; listId++) {
         IVF& list = lists[listId];
         listSizes[listId] = list.get_list_size();
     }
     MPI_Bcast(listSizes.get(), nlist * sizeof(size_t), MPI_BYTE, 0, MPI_COMM_WORLD);
-    for(size_t listId = 0; listId < nlist; listId++) {
+    for (size_t listId = 0; listId < nlist; listId++) {
         IVF& list = lists[listId];
         MPI_Bcast(list.candidate_codes.get(), list.get_list_size() * d, MPI_FLOAT, 0, MPI_COMM_WORLD);
         // printVector(list.candidate_codes.get(), d, YELLOW);
@@ -80,12 +91,20 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount) {
     distancesForNQuerys = std::make_unique<float[]>(presumeTotalQueryCompareSize);
     distancesResultBuffer = std::make_unique<float[]>(presumeTotalQueryCompareSize);
 
-    blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount); 
-    for(size_t i = 0; i < blockCount; i++) {
+    blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount);
+    for (size_t i = 0; i < blockCount; i++) {
         blockDistancesBuffer[i] = std::make_unique<float[]>(presumeTotalQueryCompareSize / blockCount);
     }
     watch.print("malloc blockBuffer");
 
+    workerSearchBlockOrder = vector<vector<idx_t>>(workerCount + 1);
+    for (size_t i = 1; i <= workerCount; i++) {
+        workerSearchBlockOrder[i] = vector<idx_t>(blockCount);
+        for (size_t j = 0; j < blockCount; j++) {
+            workerSearchBlockOrder[i][j] = j;
+        }
+        MPI_Send(workerSearchBlockOrder[i].data(), blockCount, MPI_INT64_T, i, 0, MPI_COMM_WORLD);
+    }
 }
 
 Index& Index::operator=(Index&& other) noexcept {
@@ -114,7 +133,7 @@ void Index::train(size_t n, const float* codes, bool faiss, bool lite) {
         ClusteringParameters cp;
         cp.metric = this->metric;
         // 20个iteration
-        cp.niter = 20;                     // 或其他合适的值
+        cp.niter = 20;  // 或其他合适的值
         if (lite) {
             cp.niter = 2;
         }
@@ -126,7 +145,7 @@ void Index::train(size_t n, const float* codes, bool faiss, bool lite) {
 
         this->centroid_codes.reset(clustering.get_centroids());
     } else {
-        //使用faiss库的train
+        // 使用faiss库的train
         faiss::IndexFlatL2 quantizer(d);  // the other index
         faiss::IndexIVFFlat index(&quantizer, d, nlist);
         index.train(n, codes);
@@ -151,47 +170,76 @@ void Index::train(size_t n, const float* codes, bool faiss, bool lite) {
     }
 }
 
-std::unique_ptr<IVFScanBase> Index::get_scanner(MetricType metric, OptLevel opt_level, size_t k, EdgeDevice edge_device_enabled) {
+std::unique_ptr<IVFScanBase> Index::get_scanner(MetricType metric, OptLevel opt_level, size_t k,
+                                                EdgeDevice edge_device_enabled) {
     if (metric == MetricType::METRIC_L2) {
         if (edge_device_enabled) {
             switch (opt_level) {
                 case OptLevel::OPT_NONE:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 case OptLevel::OPT_TRIANGLE:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRIANGLE, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRIANGLE, EdgeDevice::EDGEDEVIVE_ENABLED>(d,
+                                                                                                                   k));
                 case OptLevel::OPT_SUBNN_L2:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_L2, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_L2, EdgeDevice::EDGEDEVIVE_ENABLED>(d,
+                                                                                                                   k));
                 case OptLevel::OPT_SUBNN_IP:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_IP, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_IP, EdgeDevice::EDGEDEVIVE_ENABLED>(d,
+                                                                                                                   k));
                 case OptLevel::OPT_TRI_SUBNN_L2:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRI_SUBNN_L2, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRI_SUBNN_L2, EdgeDevice::EDGEDEVIVE_ENABLED>(
+                            d, k));
                 case OptLevel::OPT_TRI_SUBNN_IP:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRI_SUBNN_IP, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRI_SUBNN_IP, EdgeDevice::EDGEDEVIVE_ENABLED>(
+                            d, k));
                 case OptLevel::OPT_SUBNN_ONLY:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_ONLY, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_ONLY, EdgeDevice::EDGEDEVIVE_ENABLED>(
+                            d, k));
                 case OptLevel::OPT_ALL:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_ALL, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_ALL, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 default:
                     throw std::runtime_error("Unsupported opt_level");
             }
         } else {
             switch (opt_level) {
                 case OptLevel::OPT_NONE:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 case OptLevel::OPT_TRIANGLE:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRIANGLE, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRIANGLE, EdgeDevice::EDGEDEVIVE_DISABLED>(d,
+                                                                                                                    k));
                 case OptLevel::OPT_SUBNN_L2:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_L2, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_L2, EdgeDevice::EDGEDEVIVE_DISABLED>(d,
+                                                                                                                    k));
                 case OptLevel::OPT_SUBNN_IP:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_IP, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_IP, EdgeDevice::EDGEDEVIVE_DISABLED>(d,
+                                                                                                                    k));
                 case OptLevel::OPT_TRI_SUBNN_L2:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRI_SUBNN_L2, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRI_SUBNN_L2, EdgeDevice::EDGEDEVIVE_DISABLED>(
+                            d, k));
                 case OptLevel::OPT_TRI_SUBNN_IP:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRI_SUBNN_IP, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_TRI_SUBNN_IP, EdgeDevice::EDGEDEVIVE_DISABLED>(
+                            d, k));
                 case OptLevel::OPT_SUBNN_ONLY:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_ONLY, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_SUBNN_ONLY, EdgeDevice::EDGEDEVIVE_DISABLED>(
+                            d, k));
                 case OptLevel::OPT_ALL:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_ALL, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_ALL, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 default:
                     throw std::runtime_error("Unsupported opt_level");
             }
@@ -200,42 +248,60 @@ std::unique_ptr<IVFScanBase> Index::get_scanner(MetricType metric, OptLevel opt_
         if (edge_device_enabled) {
             switch (opt_level) {
                 case OptLevel::OPT_NONE:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 case OptLevel::OPT_TRIANGLE:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_TRIANGLE, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_TRIANGLE, EdgeDevice::EDGEDEVIVE_ENABLED>(d,
+                                                                                                                   k));
                 // case OptLevel::OPT_SUBNN_L2:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_L2, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_L2,
+                //     EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 // case OptLevel::OPT_SUBNN_IP:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_IP, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_IP,
+                //     EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 // case OptLevel::OPT_TRI_SUBNN_L2:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_TRI_SUBNN_L2, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP,
+                //     OptLevel::OPT_TRI_SUBNN_L2, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 // case OptLevel::OPT_TRI_SUBNN_IP:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_TRI_SUBNN_IP, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP,
+                //     OptLevel::OPT_TRI_SUBNN_IP, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 // case OptLevel::OPT_SUBNN_ONLY:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_ONLY, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_ONLY,
+                //     EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 // case OptLevel::OPT_ALL:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_ALL, EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_ALL,
+                //     EdgeDevice::EDGEDEVIVE_ENABLED>(d, k));
                 default:
                     throw std::runtime_error("Unsupported opt_level");
             }
         } else {
             switch (opt_level) {
                 case OptLevel::OPT_NONE:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 case OptLevel::OPT_TRIANGLE:
-                    return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_TRIANGLE, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                    return std::unique_ptr<IVFScanBase>(
+                        new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_TRIANGLE, EdgeDevice::EDGEDEVIVE_DISABLED>(d,
+                                                                                                                    k));
                 // case OptLevel::OPT_SUBNN_L2:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_L2, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_L2,
+                //     EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 // case OptLevel::OPT_SUBNN_IP:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_IP, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_IP,
+                //     EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 // case OptLevel::OPT_TRI_SUBNN_L2:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_TRI_SUBNN_L2, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP,
+                //     OptLevel::OPT_TRI_SUBNN_L2, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 // case OptLevel::OPT_TRI_SUBNN_IP:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_TRI_SUBNN_IP, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP,
+                //     OptLevel::OPT_TRI_SUBNN_IP, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 // case OptLevel::OPT_SUBNN_ONLY:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_ONLY, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_SUBNN_ONLY,
+                //     EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 // case OptLevel::OPT_ALL:
-                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_ALL, EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
+                //     return std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_IP, OptLevel::OPT_ALL,
+                //     EdgeDevice::EDGEDEVIVE_DISABLED>(d, k));
                 default:
                     throw std::runtime_error("Unsupported opt_level");
             }
@@ -250,10 +316,8 @@ void Index::single_thread_nearest_cluster_search(size_t n, const float* queries,
     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, 1);
     for (size_t i = 0; i < n; i++) {
         scaner_quantizer->set_query(queries + i * d);
-        scaner_quantizer->lite_scan_codes(nlist,
-                                          centroid_codes.get(),
-                                          reinterpret_cast<const size_t*>(centroid_ids.get()),
-                                          distances + i,
+        scaner_quantizer->lite_scan_codes(nlist, centroid_codes.get(),
+                                          reinterpret_cast<const size_t*>(centroid_ids.get()), distances + i,
                                           labels + i);
         // no need to sort result, because only one result
     }
@@ -269,18 +333,18 @@ void Index::add_simple(size_t n, const float* codes) {
     // for(size_t i = 0; i < nlist; i++) {
     //     std::cout << BLUE << centroid_ids[i] << RESET << std::endl;
     // }
-    //把n个向量加到聚类中心里面，codes是向量
+    // 把n个向量加到聚类中心里面，codes是向量
     if (n == 0) {
         return;
     }
-    //向量到中心的距离，和向量对应聚类中心的id
+    // 向量到中心的距离，和向量对应聚类中心的id
     std::unique_ptr<float[]> candicate2centroid = std::make_unique<float[]>(n);
     std::unique_ptr<idx_t[]> listidcandicates = std::make_unique<idx_t[]>(n);
-    
+
     init_result(metric, n, candicate2centroid.get(), listidcandicates.get());
     size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), n);
-    size_t batch_size = n / nt; //一个线程分配多少向量
-    size_t extra = n % nt; //多余的向量数
+    size_t batch_size = n / nt;  // 一个线程分配多少向量
+    size_t extra = n % nt;       // 多余的向量数
     // auto nearest_search_start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(nt)
     for (size_t i = 0; i < nt; i++) {
@@ -293,17 +357,19 @@ void Index::add_simple(size_t n, const float* codes) {
             end = start + batch_size;
         }
         if (start < end) {
-            single_thread_nearest_cluster_search(end - start, codes + start * d, candicate2centroid.get() + start, listidcandicates.get() + start);
+            single_thread_nearest_cluster_search(end - start, codes + start * d, candicate2centroid.get() + start,
+                                                 listidcandicates.get() + start);
         }
     }
     // auto nearest_search_end = std::chrono::high_resolution_clock::now();
 
     // if(verbose){
-    //     std::cout << "nearest search elapsed: " << std::chrono::duration<double>(nearest_search_end - nearest_search_start).count() << "s" << std::endl;
+    //     std::cout << "nearest search elapsed: " << std::chrono::duration<double>(nearest_search_end -
+    //     nearest_search_start).count() << "s" << std::endl;
     // }
 
     // auto sort_and_add_start = std::chrono::high_resolution_clock::now();
-    //每个聚类的向量数量
+    // 每个聚类的向量数量
     std::unique_ptr<size_t[]> list_sizes = std::make_unique<size_t[]>(nlist);
     std::fill_n(list_sizes.get(), nlist, 0);
 
@@ -326,31 +392,33 @@ void Index::add_simple(size_t n, const float* codes) {
 
     std::fill_n(list_sizes.get(), nlist, 0);
 
-    //加到聚类中的顺序，从距离聚类中心最近的向量开始加
+    // 加到聚类中的顺序，从距离聚类中心最近的向量开始加
     std::unique_ptr<size_t[]> add_order = std::make_unique<size_t[]>(n);
     std::iota(add_order.get(), add_order.get() + n, 0);
     // if (metric == MetricType::METRIC_L2) {
-    std::sort(add_order.get(), add_order.get() + n, [&](size_t i, size_t j) { return candicate2centroid[i] < candicate2centroid[j]; });
+    std::sort(add_order.get(), add_order.get() + n,
+              [&](size_t i, size_t j) { return candicate2centroid[i] < candicate2centroid[j]; });
     // } else {
-    //     std::sort(add_order.get(), add_order.get() + n, [&](size_t i, size_t j) { return candicate2centroid[i] > candicate2centroid[j]; });
+    //     std::sort(add_order.get(), add_order.get() + n, [&](size_t i, size_t j) { return candicate2centroid[i] >
+    //     candicate2centroid[j]; });
     // }
 
 #pragma omp parallel
     {
         int nt = omp_get_num_threads();
-        //当前线程的id
+        // 当前线程的id
         int tid = omp_get_thread_num();
 
         for (size_t oi = 0; oi < n; oi++) {
-            size_t i = add_order[oi]; //当前要加的是第i个向量
-            size_t list_id = listidcandicates[i];  // assert > 0 ， 第i个向量要加到聚类list_id中
-            if (list_id % nt == tid) { //tid线程发现是自己负责的list_id
-                size_t list_size = list_sizes[list_id]; //当前聚类的向量数量
-                lists[list_id].candidate_id[list_size] = i; //把i加到对应的聚类中
+            size_t i = add_order[oi];                        // 当前要加的是第i个向量
+            size_t list_id = listidcandicates[i];            // assert > 0 ， 第i个向量要加到聚类list_id中
+            if (list_id % nt == tid) {                       // tid线程发现是自己负责的list_id
+                size_t list_size = list_sizes[list_id];      // 当前聚类的向量数量
+                lists[list_id].candidate_id[list_size] = i;  // 把i加到对应的聚类中
                 // if ((opt_level & OptLevel::OPT_TRIANGLE) || (opt_level & OptLevel::OPT_SUBNN_IP)) {
                 //     lists[list_id].candidate2centroid[list_size] = candicate2centroid[i];
                 // }
-                std::copy_n(codes + i * d, d, lists[list_id].candidate_codes.get() + list_size * d); //拷贝第i个向量
+                std::copy_n(codes + i * d, d, lists[list_id].candidate_codes.get() + list_size * d);  // 拷贝第i个向量
                 list_sizes[list_id]++;
             }
         }
@@ -374,8 +442,8 @@ void Index::add(size_t n, const float* codes) {
     init_result(metric, n, candicate2centroid.get(), listidcandicates.get());
 
     size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), n);
-    size_t batch_size = n / nt; //一个线程分配多少向量
-    size_t extra = n % nt; //多余的向量数
+    size_t batch_size = n / nt;  // 一个线程分配多少向量
+    size_t extra = n % nt;       // 多余的向量数
     auto nearest_search_start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(nt)
     for (size_t i = 0; i < nt; i++) {
@@ -388,17 +456,20 @@ void Index::add(size_t n, const float* codes) {
             end = start + batch_size;
         }
         if (start < end) {
-            single_thread_nearest_cluster_search(end - start, codes + start * d, candicate2centroid.get() + start, listidcandicates.get() + start);
+            single_thread_nearest_cluster_search(end - start, codes + start * d, candicate2centroid.get() + start,
+                                                 listidcandicates.get() + start);
         }
     }
     auto nearest_search_end = std::chrono::high_resolution_clock::now();
 
-    if(verbose){
-        std::cout << "nearest search elapsed: " << std::chrono::duration<double>(nearest_search_end - nearest_search_start).count() << "s" << std::endl;
+    if (verbose) {
+        std::cout << "nearest search elapsed: "
+                  << std::chrono::duration<double>(nearest_search_end - nearest_search_start).count() << "s"
+                  << std::endl;
     }
 
     auto sort_and_add_start = std::chrono::high_resolution_clock::now();
-    //每个聚类的向量数量
+    // 每个聚类的向量数量
     std::unique_ptr<size_t[]> list_sizes = std::make_unique<size_t[]>(nlist);
     std::fill_n(list_sizes.get(), nlist, 0);
 
@@ -408,7 +479,7 @@ void Index::add(size_t n, const float* codes) {
         list_sizes[listidcandicates[i]]++;
     }
 
-    //一共加了多少个向量
+    // 一共加了多少个向量
     size_t total_add = 0;
     for (size_t i = 0; i < nlist; i++) {
         total_add += list_sizes[i];
@@ -421,31 +492,33 @@ void Index::add(size_t n, const float* codes) {
 
     std::fill_n(list_sizes.get(), nlist, 0);
 
-    //加到聚类中的顺序，从距离聚类中心最近的向量开始加
+    // 加到聚类中的顺序，从距离聚类中心最近的向量开始加
     std::unique_ptr<size_t[]> add_order = std::make_unique<size_t[]>(n);
     std::iota(add_order.get(), add_order.get() + n, 0);
     if (metric == MetricType::METRIC_L2) {
-        std::sort(add_order.get(), add_order.get() + n, [&](size_t i, size_t j) { return candicate2centroid[i] < candicate2centroid[j]; });
+        std::sort(add_order.get(), add_order.get() + n,
+                  [&](size_t i, size_t j) { return candicate2centroid[i] < candicate2centroid[j]; });
     } else {
-        std::sort(add_order.get(), add_order.get() + n, [&](size_t i, size_t j) { return candicate2centroid[i] > candicate2centroid[j]; });
+        std::sort(add_order.get(), add_order.get() + n,
+                  [&](size_t i, size_t j) { return candicate2centroid[i] > candicate2centroid[j]; });
     }
 
 #pragma omp parallel
     {
         int nt = omp_get_num_threads();
-        //当前线程的id
+        // 当前线程的id
         int tid = omp_get_thread_num();
 
         for (size_t oi = 0; oi < n; oi++) {
-            size_t i = add_order[oi]; //当前要加的是第i个向量
-            size_t list_id = listidcandicates[i];  // assert > 0 ， 第i个向量要加到聚类list_id中
-            if (list_id % nt == tid) { //tid线程发现是自己负责的list_id
-                size_t list_size = list_sizes[list_id]; //当前聚类的向量数量
-                lists[list_id].candidate_id[list_size] = i; //把i加到对应的聚类中
+            size_t i = add_order[oi];                        // 当前要加的是第i个向量
+            size_t list_id = listidcandicates[i];            // assert > 0 ， 第i个向量要加到聚类list_id中
+            if (list_id % nt == tid) {                       // tid线程发现是自己负责的list_id
+                size_t list_size = list_sizes[list_id];      // 当前聚类的向量数量
+                lists[list_id].candidate_id[list_size] = i;  // 把i加到对应的聚类中
                 if ((opt_level & OptLevel::OPT_TRIANGLE) || (opt_level & OptLevel::OPT_SUBNN_IP)) {
                     lists[list_id].candidate2centroid[list_size] = candicate2centroid[i];
                 }
-                std::copy_n(codes + i * d, d, lists[list_id].candidate_codes.get() + list_size * d); //拷贝第i个向量
+                std::copy_n(codes + i * d, d, lists[list_id].candidate_codes.get() + list_size * d);  // 拷贝第i个向量
                 list_sizes[list_id]++;
             }
         }
@@ -502,13 +575,18 @@ void Index::add(size_t n, const float* codes) {
                     double train_percent = 100.0 * train_elapsed / total_elapsed;
                     double add_percent = 100.0 * add_elapsed / total_elapsed;
                     double search_percent = 100.0 * search_elapsed / total_elapsed;
-                    std::cout << std::format("train: {:.2f}%    add: {:.2f}%    search: {:.2f}%    total: {:.2f}\n", train_percent, add_percent, search_percent, total_elapsed);
+                    std::cout << std::format("train: {:.2f}%    add: {:.2f}%    search: {:.2f}%    total: {:.2f}\n",
+                                             train_percent, add_percent, search_percent, total_elapsed);
                     float sub_recall_ip = total_sub_count_ip ? 100.0 * total_sub_recall_ip / total_sub_count_ip : 0;
                     float sub_recall_l2 = total_sub_count_l2 ? 100.0 * total_sub_recall_l2 / total_sub_count_l2 : 0;
-                    float sub_recall_ip_5 = total_sub_count_ip_5 ? 100.0 * total_sub_recall_ip_5 / total_sub_count_ip_5 : 0;
-                    float sub_recall_l2_5 = total_sub_count_l2_5 ? 100.0 * total_sub_recall_l2_5 / total_sub_count_l2_5 : 0;
-                    std::cout << std::format("Recall    SUBNN_IP top5: {:.2f}%    topk: {:.2f}%    SUBNN_L2 top5: {:.2f}%    topk: {:.2f}%    {}/{}\n",
-                                             sub_recall_ip_5, sub_recall_ip, sub_recall_l2_5, sub_recall_l2, sub_nprobe, sub_nlist);
+                    float sub_recall_ip_5 =
+                        total_sub_count_ip_5 ? 100.0 * total_sub_recall_ip_5 / total_sub_count_ip_5 : 0;
+                    float sub_recall_l2_5 =
+                        total_sub_count_l2_5 ? 100.0 * total_sub_recall_l2_5 / total_sub_count_l2_5 : 0;
+                    std::cout << std::format(
+                        "Recall    SUBNN_IP top5: {:.2f}%    topk: {:.2f}%    SUBNN_L2 top5: {:.2f}%    topk: {:.2f}%  "
+                        "  {}/{}\n",
+                        sub_recall_ip_5, sub_recall_ip, sub_recall_l2_5, sub_recall_l2, sub_nprobe, sub_nlist);
                 }
             }
         };
@@ -518,10 +596,7 @@ void Index::add(size_t n, const float* codes) {
                 double total_elapsed = train_elapsed + add_elapsed + search_elapsed;
                 std::cout << std::format("build: 100.0%\n");
                 std::cout << std::format("train: {:.2f}   add: {:.2f}    search: {:.2f}    total: {:.2f}\n",
-                                         train_elapsed,
-                                         add_elapsed,
-                                         search_elapsed,
-                                         total_elapsed);
+                                         train_elapsed, add_elapsed, search_elapsed, total_elapsed);
             }
         };
 #pragma omp parallel for
@@ -531,15 +606,21 @@ void Index::add(size_t n, const float* codes) {
             size_t nb = list.get_list_size();
 
             size_t this_sub_nlist_L2 = std::min(sub_nlist, (nb + SUB_LIST_SIZE - 1) / SUB_LIST_SIZE);
-            size_t this_sub_nprobe_L2 = std::min(std::max(1ul, static_cast<size_t>(1.0 * this_sub_nlist_L2 * sub_nprobe / sub_nlist)), this_sub_nlist_L2);
+            size_t this_sub_nprobe_L2 =
+                std::min(std::max(1ul, static_cast<size_t>(1.0 * this_sub_nlist_L2 * sub_nprobe / sub_nlist)),
+                         this_sub_nlist_L2);
 
-            size_t this_sub_nlist_IP = std::min(std::max(1ul, static_cast<size_t>(sub_nlist)), static_cast<size_t>((nb + SUB_LIST_SIZE - 1) / SUB_LIST_SIZE));
-            size_t this_sub_nprobe_IP = std::min(std::max(1ul, static_cast<size_t>(1.0 * this_sub_nlist_IP * sub_nprobe / sub_nlist * IP_SUB_RATIO)), this_sub_nlist_IP);
+            size_t this_sub_nlist_IP = std::min(std::max(1ul, static_cast<size_t>(sub_nlist)),
+                                                static_cast<size_t>((nb + SUB_LIST_SIZE - 1) / SUB_LIST_SIZE));
+            size_t this_sub_nprobe_IP = std::min(
+                std::max(1ul, static_cast<size_t>(1.0 * this_sub_nlist_IP * sub_nprobe / sub_nlist * IP_SUB_RATIO)),
+                this_sub_nlist_IP);
 
             const float* centroid_code = centroid_codes.get() + listid * d;
 
             if (opt_level & OptLevel::OPT_SUBNN_L2) {
-                Index sub_index(d, this_sub_nlist_L2, this_sub_nprobe_L2, MetricType::METRIC_L2, OptLevel::OPT_NONE, 0, 0, 0, false);
+                Index sub_index(d, this_sub_nlist_L2, this_sub_nprobe_L2, MetricType::METRIC_L2, OptLevel::OPT_NONE, 0,
+                                0, 0, false);
                 Stopwatch watch;
                 sub_index.train(nb, xb);
 #pragma omp atomic
@@ -600,7 +681,8 @@ void Index::add(size_t n, const float* codes) {
                         }
                     }
                 }
-                Index sub_index(d, this_sub_nlist_IP, this_sub_nprobe_IP, MetricType::METRIC_IP, OptLevel::OPT_NONE, 0, 0, 0, false);  // TODO: this_sub_nlist_L2 or this_sub_nlist_IP
+                Index sub_index(d, this_sub_nlist_IP, this_sub_nprobe_IP, MetricType::METRIC_IP, OptLevel::OPT_NONE, 0,
+                                0, 0, false);  // TODO: this_sub_nlist_L2 or this_sub_nlist_IP
                 Stopwatch watch;
                 sub_index.train(nb, norm_xb);
 #pragma omp atomic
@@ -668,63 +750,123 @@ void Index::add(size_t n, const float* codes) {
     }
 }
 std::unique_ptr<idx_t[]> Index::findNearNprobeOfCentroidIds(size_t n, const float* queries) {
-    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe); //搜索最近的聚类中心
+    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe);  // 搜索最近的聚类中心
 
-    std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe); // n个查询向量到nprobe个聚类中心的距离
-    std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
-    init_result(metric, n * nprobe, centroid2queries.get(), listidqueries.get()); //优先队列，存储离n个查询向量最近的nprobe个聚类中心
-    
-    //下面四个向量都和i绑定，也就是和每一个查询绑定
-    float* centroids2query = centroid2queries.get(); //单个查询对应的距离
-    idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
+    std::unique_ptr<float[]> centroid2queries =
+        std::make_unique<float[]>(n * nprobe);  // n个查询向量到nprobe个聚类中心的距离
+    std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe);  // 最近的nprobe个聚类中心的id
+    init_result(metric, n * nprobe, centroid2queries.get(),
+                listidqueries.get());  // 优先队列，存储离n个查询向量最近的nprobe个聚类中心
+
+    // 下面四个向量都和i绑定，也就是和每一个查询绑定
+    float* centroids2query = centroid2queries.get();  // 单个查询对应的距离
+    idx_t* listids = listidqueries.get();             // 单个查询对应的聚类中心id
 
     for (size_t i = 0; i < n; i++) {
-        //每一个i对应一个查询
+        // 每一个i对应一个查询
         scaner_quantizer->set_query(queries + i * d);
-        //获取最近的nprobe个聚类中心
-        scaner_quantizer->lite_scan_codes(nlist,
-                                          centroid_codes.get(),
+        // 获取最近的nprobe个聚类中心
+        scaner_quantizer->lite_scan_codes(nlist, centroid_codes.get(),
                                           reinterpret_cast<const size_t*>(centroid_ids.get()),
-                                          centroids2query, //ret
-                                          listids); //ret , 分别对应堆
-        //要查的聚类id存储在listids的前nprobe个
+                                          centroids2query,  // ret
+                                          listids);         // ret , 分别对应堆
+        // 要查的聚类id存储在listids的前nprobe个
         sort_result(metric, nprobe, centroids2query, listids);
         centroids2query += nprobe;
         listids += nprobe;
     }
     return listidqueries;
 }
+void Index::warmUpSearch(size_t n, const float* queries, size_t k, float* distances, idx_t* labels,
+                         idx_t* listidqueries) {
+    // std::cout << BLUE << "simple version of search" << RESET;
+    // n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
+    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k);  // 在聚类中心内部搜
 
+    // 下面四个向量都和i绑定，也就是和每一个查询绑定
+    float* disi = distances;         // 结果，查询向量最近的k个向量的距离
+    idx_t* idxi = labels;            // 结果，查询向量最近的k个向量的id
+    idx_t* listids = listidqueries;  // 单个查询对应的聚类中心id
+
+    cout << GREEN << "[warmupSearchList " << warmUpSearchList << ", warmupSearchListSize " << warmUpSearchListSize << "]" << RESET << endl;
+    if (warmUpSearchList * warmUpSearchListSize < k) {
+        cout << YELLOW << "WARNING: not enough warmup" << RESET << endl;
+    }
+    // assert(warmUpSearchList % nlist == 0);
+    // 设置为k
+
+    for (size_t i = 0; i < n; i++) {
+        // 每一个i对应一个查询
+        scaner->set_query(queries + i * d);
+        // 获取最近的nprobe个聚类中心
+        // 要查的聚类id存储在listids的前nprobe个
+
+        //由于listidqueries里面的聚类id是从近到远排列的，因此可以从0开始遍历
+        // size_t totalCompare = 0;
+        for (size_t j = 0; j < warmUpSearchList; j++) {
+            // 在第j个聚类中搜索所有点
+            // list代表聚类
+            IVF& list = lists[listids[j]];
+
+            // 查询点到中心的距离
+            // 聚类中的点的数量
+            size_t list_size = list.get_list_size();
+
+            if (list_size < warmUpSearchListSize) {
+                cout << YELLOW << std::format("WARNING: warmupSearchListSize set to list_size({})", list_size) << RESET << endl;
+                // totalCompare += list_size;
+                scaner->lite_scan_codes(list_size, list.get_candidate_codes(), list.get_candidate_id(), disi, idxi);
+            } else {
+                // totalCompare += warmUpSearchListSize;
+                scaner->lite_scan_codes(warmUpSearchListSize, list.get_candidate_codes(), list.get_candidate_id(), disi, idxi);
+            }
+            
+
+        }
+        // cout << std::format("warm{} {}", i, totalCompare) << endl;
+        // sort_result(metric, k, disi, idxi);
+        disi += k;
+        idxi += k;
+        listids += nprobe;
+    }
+}
 void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
     this->blockSize = n / blockCount;
     printIndex();
     MyStopWatch watch(true);
-    std::cout << GREEN << "block search" << RESET << std::endl;
-    //n个查询向量对应的nprobe个聚类中心id
+    // std::cout << GREEN << "block search" << RESET << std::endl;
+    // n个查询向量对应的nprobe个聚类中心id
     std::unique_ptr<idx_t[]> listidqueries = findNearNprobeOfCentroidIds(n, queries);
     watch.print("findNearNprobeOfCentroidIds");
 
-    //算出每个查询向量一共要和多少个向量比较
+    warmUpSearch(n, queries, k, distances, labels, listidqueries.get());
+    watch.print("warmupSearch");
+
+    // for (size_t i = 0; i < n; i++) {
+    //     cout << i << "maxheap: " << distances[i * k] << endl;
+    // }
+    // 算出每个查询向量一共要和多少个向量比较
     std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n);
-#pragma omp parallel for 
-    for(size_t q = 0; q < n; q++) {
-        for(size_t i = 0; i < nprobe; i++) {
+#pragma omp parallel for
+    for (size_t q = 0; q < n; q++) {
+        for (size_t i = 0; i < nprobe; i++) {
             queryCompareSize[q] += lists[listidqueries[q * nprobe + i]].get_list_size();
         }
     }
 
-    //为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q], 注意大小是n + 1
-    std::unique_ptr<size_t[]> queryCompareSizePreSum = std::make_unique<size_t[]>(n + 1); 
-    for(size_t q = 1; q < n + 1; q++) {
+    // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q], 注意大小是n + 1
+    std::unique_ptr<size_t[]> queryCompareSizePreSum = std::make_unique<size_t[]>(n + 1);
+    for (size_t q = 1; q < n + 1; q++) {
         queryCompareSizePreSum[q] = queryCompareSizePreSum[q - 1] + queryCompareSize[q - 1];
     }
-    //所有查询向量加起来一共要比多少个向量
+    // 所有查询向量加起来一共要比多少个向量
     size_t totalQueryCompareSize = queryCompareSizePreSum[n - 1] + queryCompareSize[n - 1];
 
-    std::unique_ptr<size_t[]> queryCompareSizeForBlocks = std::make_unique<size_t[]>(blockCount); 
-    for(size_t i = 0; i < blockCount; i++) {
+    std::unique_ptr<size_t[]> queryCompareSizeForBlocks = std::make_unique<size_t[]>(blockCount);
+    for (size_t i = 0; i < blockCount; i++) {
         size_t queryStart = i * blockSize;
-        size_t compareSizeForBlock = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
+        size_t compareSizeForBlock =
+            queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
         queryCompareSizeForBlocks[i] = compareSizeForBlock;
     }
     watch.print("queryCompareSize");
@@ -734,77 +876,78 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     MPI_Bcast(const_cast<float*>(queries), n * d, MPI_FLOAT, 0, MPI_COMM_WORLD);
     watch.print("nq,querys");
 
-    //4.listidqueries 
+    // 4.listidqueries
     MPI_Bcast(listidqueries.get(), n * nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
-    //5.queryCompareSize
+    // 5.queryCompareSize
     MPI_Bcast(queryCompareSize.get(), n, MPI_INT64_T, 0, MPI_COMM_WORLD);
-    //6.queryCompareSizePreSum
+    // 6.queryCompareSizePreSum
     MPI_Bcast(queryCompareSizePreSum.get(), (n + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
 
     watch.print("BroadCast queryCompareSize");
 
-    if(presumeTotalQueryCompareSize < totalQueryCompareSize) {
+    if (presumeTotalQueryCompareSize < totalQueryCompareSize) {
         distancesForNQuerys = std::make_unique<float[]>(totalQueryCompareSize);
     }
     watch.print("might malloc distancesForNquerys");
 
-    //计算每一个block中查询向量比较的个数
-    
-    // printVector(queryCompareSizeForBlocks.get(), blockCount, YELLOW);
-    
-    //利用tag，先接受长度，再接受结果数组
+    // 计算每一个block中查询向量比较的个数
 
-    // std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n); 
-    // auto blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount); 
+    // printVector(queryCompareSizeForBlocks.get(), blockCount, YELLOW);
+
+    // 利用tag，先接受长度，再接受结果数组
+
+    // std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n);
+    // auto blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount);
     // for(size_t i = 0; i < blockCount; i++) {
     //     blockDistancesBuffer[i] = std::make_unique<float[]>(queryCompareSizeForBlocks[i]);
     // }
     // watch.print("malloc blockBuffer");
 
     MPI_Status status;
-    Worker::SearchResultInfo resultInfo; 
+    Worker::SearchResultInfo resultInfo;
     size_t _blockCount = blockCount;
-    while(_blockCount--)
-    for(int rank = 1; rank <= workerCount; rank++) {
-        MPI_Recv(&resultInfo, sizeof(Worker::SearchResultInfo), MPI_BYTE, rank, Worker::SearchResultTag::INFO, MPI_COMM_WORLD, &status);
-        // cout <<queryCompareSizeForBlocks[resultInfo.blockId] * sizeof(float)  << endl;
-        MPI_Recv(blockDistancesBuffer[resultInfo.blockId].get(), queryCompareSizeForBlocks[resultInfo.blockId], MPI_FLOAT, rank, Worker::SearchResultTag::DISTANCES, MPI_COMM_WORLD, &status);
-        // resultInfo.print();
-        size_t q = resultInfo.blockId * blockSize;
-        size_t queryOffset = queryCompareSizePreSum[q];
-        add_n(blockDistancesBuffer[resultInfo.blockId].get(), distancesForNQuerys.get() + queryOffset, distancesForNQuerys.get() + queryOffset, resultInfo.size);
-    }
+    while (_blockCount--)
+        for (int rank = 1; rank <= workerCount; rank++) {
+            MPI_Recv(&resultInfo, sizeof(Worker::SearchResultInfo), MPI_BYTE, rank, Worker::SearchResultTag::INFO,
+                     MPI_COMM_WORLD, &status);
+            // cout <<queryCompareSizeForBlocks[resultInfo.blockId] * sizeof(float)  << endl;
+            MPI_Recv(blockDistancesBuffer[resultInfo.blockId].get(), queryCompareSizeForBlocks[resultInfo.blockId],
+                     MPI_FLOAT, rank, Worker::SearchResultTag::DISTANCES, MPI_COMM_WORLD, &status);
+            // resultInfo.print();
+            size_t q = resultInfo.blockId * blockSize;
+            size_t queryOffset = queryCompareSizePreSum[q];
+            add_n(blockDistancesBuffer[resultInfo.blockId].get(), distancesForNQuerys.get() + queryOffset,
+                  distancesForNQuerys.get() + queryOffset, resultInfo.size);
+        }
     watch.print("searchblock");
-    // MPI_Recv(&resultInfo, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE, Node::SearchResultTag::INFO, MPI_COMM_WORLD, &status);
-    // MPI_Recv(&blockDistances, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-    // size_t nodeId = status.MPI_SOURCE, blockIndex = blockDistances.size;
-    // cout << blockDistances.size() << endl;
-    // for(auto& v : blockDistances) {
+    // MPI_Recv(&resultInfo, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE, Node::SearchResultTag::INFO,
+    // MPI_COMM_WORLD, &status); MPI_Recv(&blockDistances, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE,
+    // MPI_ANY_TAG, MPI_COMM_WORLD, &status); size_t nodeId = status.MPI_SOURCE, blockIndex = blockDistances.size; cout
+    // << blockDistances.size() << endl; for(auto& v : blockDistances) {
     //     printVector(v, GREEN);
     // }
     // //加和
-    // add_n(blockDistances.distances.get(), distancesForNQuerys.get() + queryOffset, distancesForNQuerys.get() + queryOffset, blockDistances.size);
-    // auto clockaddEnd = std::chrono::high_resolution_clock::now();
-    // std::cout << "add:" << std::chrono::duration<double>(clockaddEnd - clockadd).count() << "s" << std::endl;
+    // add_n(blockDistances.distances.get(), distancesForNQuerys.get() + queryOffset, distancesForNQuerys.get() +
+    // queryOffset, blockDistances.size); auto clockaddEnd = std::chrono::high_resolution_clock::now(); std::cout <<
+    // "add:" << std::chrono::duration<double>(clockaddEnd - clockadd).count() << "s" << std::endl;
     // printVector(distancesForNQuerys.get() + queryOffset, blockDistances.size, GREEN);
     // auto clock6 = std::chrono::high_resolution_clock::now();
     // std::cout << "search:" << std::chrono::duration<double>(clock6 - clock5).count() << "s" << std::endl;
 
-  
-#pragma omp parallel for 
-    for(size_t q = 0; q < n; q++) {
+#pragma omp parallel for
+    for (size_t q = 0; q < n; q++) {
         float* disHeap = distances + q * k;
         idx_t* idHeap = labels + q * k;
         size_t offsetOutOfList = 0;
-        for(size_t i = 0; i < nprobe; i++) {
+        for (size_t i = 0; i < nprobe; i++) {
             IVF& list = lists[listidqueries[i + q * nprobe]];
-            for(size_t j = 0; j < list.get_list_size(); j++) {
+            for (size_t j = 0; j < list.get_list_size(); j++) {
                 float dis = distancesForNQuerys[queryCompareSizePreSum[q] + offsetOutOfList];
                 if (dis < disHeap[0]) {
-                        //比堆顶
+                    // 比堆顶
                     idx_t id = list.candidate_id[j];
                     heap_replace_top<MetricType::METRIC_L2>(k, disHeap, idHeap, dis, id);
-                } 
+                }
                 offsetOutOfList++;
             }
         }
@@ -814,32 +957,36 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
         // idHeap += k;
         // disHeap += k;
     }
-//     // auto clock7 = std::chrono::high_resolution_clock::now();
-//     // std::cout << "heap:" << std::chrono::duration<double>(clock7 - clock6).count() << "s" << std::endl;
+    //     // auto clock7 = std::chrono::high_resolution_clock::now();
+    //     // std::cout << "heap:" << std::chrono::duration<double>(clock7 - clock6).count() << "s" << std::endl;
     watch.print("heap");
-    // MPI_Recv(&resultInfo, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE, Node::SearchResultTag::INFO, MPI_COMM_WORLD, &status);
+    // MPI_Recv(&resultInfo, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE, Node::SearchResultTag::INFO,
+    // MPI_COMM_WORLD, &status);
 
-    cout << CRAN << "finish search" << RESET << endl; 
+    cout << CRAN << "finish search" << RESET << endl;
 }
 void Index::printIndex() {
-    cout << GREEN << "Index:[";
+    cout << YELLOW << "Index:[";
     cout << "d:" << d;
     cout << ",nlist:" << nlist;
     cout << ",nprobe:" << nprobe;
     cout << ",node:" << workerCount;
+    cout << "]";
     cout << endl;
 }
-// void Index::single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
+// void Index::single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels,
+// float ratio, Stats* stats) {
 //     // std::cout << BLUE << "simple version of search" << RESET;
 //     //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
 
 //     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe); //搜索最近的聚类中心
 //     std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k); //在聚类中心内部搜
 
-//     std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe); // n个查询向量到nprobe个聚类中心的距离
-//     std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
-//     init_result(metric, n * nprobe, centroid2queries.get(), listidqueries.get()); //优先队列，存储离n个查询向量最近的nprobe个聚类中心
-    
+//     std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe); //
+//     n个查询向量到nprobe个聚类中心的距离 std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n *
+//     nprobe); //最近的nprobe个聚类中心的id init_result(metric, n * nprobe, centroid2queries.get(),
+//     listidqueries.get()); //优先队列，存储离n个查询向量最近的nprobe个聚类中心
+
 //     //下面四个向量都和i绑定，也就是和每一个查询绑定
 //     float* disi = distances; //结果，查询向量最近的k个向量的距离
 //     idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
@@ -875,7 +1022,7 @@ void Index::printIndex() {
 
 //                 scaner->lite_scan_codes(list_size,list.get_candidate_codes(), list.get_candidate_id(), disi, idxi);
 //             }
-//         } 
+//         }
 //         sort_result(metric, k, disi, idxi);
 //         disi += k;
 //         idxi += k;
@@ -883,43 +1030,45 @@ void Index::printIndex() {
 //         listids += nprobe;
 //     }
 // }
-void Index::single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats) {
-    //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
-    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe); //搜索最近的聚类中心
-    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k); //在聚类中心内部搜
+void Index::single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
+                                 Stats* stats) {
+    // n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
+    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe);  // 搜索最近的聚类中心
+    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k);                // 在聚类中心内部搜
 
-    std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe); // n个查询向量到nprobe个聚类中心的距离
-    std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe); //最近的nprobe个聚类中心的id
-    init_result(metric, n * nprobe, centroid2queries.get(), listidqueries.get()); //优先队列，存储离n个查询向量最近的nprobe个聚类中心
+    std::unique_ptr<float[]> centroid2queries =
+        std::make_unique<float[]>(n * nprobe);  // n个查询向量到nprobe个聚类中心的距离
+    std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe);  // 最近的nprobe个聚类中心的id
+    init_result(metric, n * nprobe, centroid2queries.get(),
+                listidqueries.get());  // 优先队列，存储离n个查询向量最近的nprobe个聚类中心
 
-    //下面四个向量都和i绑定，也就是和每一个查询绑定
+    // 下面四个向量都和i绑定，也就是和每一个查询绑定
     float* simi = distances;
     idx_t* idxi = labels;
-    float* centroids2query = centroid2queries.get(); //单个查询对应的距离
-    idx_t* listids = listidqueries.get();//单个查询对应的IVF聚类中心id
+    float* centroids2query = centroid2queries.get();  // 单个查询对应的距离
+    idx_t* listids = listidqueries.get();             // 单个查询对应的IVF聚类中心id
 
     for (size_t i = 0; i < n; i++) {
-        //每一个i对应一个查询
+        // 每一个i对应一个查询
         scaner_quantizer->set_query(queries + i * d);
         scaner->set_query(queries + i * d);
-        //把和nlist个聚类中心计算距离的结果放进centroids2query这个堆里面
-        scaner_quantizer->lite_scan_codes(nlist,
-                                          centroid_codes.get(),
+        // 把和nlist个聚类中心计算距离的结果放进centroids2query这个堆里面
+        scaner_quantizer->lite_scan_codes(nlist, centroid_codes.get(),
                                           reinterpret_cast<const size_t*>(centroid_ids.get()),
-                                          centroids2query, //ret
-                                          listids); //ret , 分别对应两个堆
-        //取前nprobe个聚类中心
+                                          centroids2query,  // ret
+                                          listids);         // ret , 分别对应两个堆
+        // 取前nprobe个聚类中心
         sort_result(metric, nprobe, centroids2query, listids);
 
         if (metric == MetricType::METRIC_L2) {
             for (size_t j = 0; j < nprobe; j++) {
-                //在第j个聚类中搜索所有点
-                //list代表聚类
+                // 在第j个聚类中搜索所有点
+                // list代表聚类
                 IVF& list = lists[listids[j]];
 
-                //查询点到中心的距离
+                // 查询点到中心的距离
                 float centroid2query = centroids2query[j];
-                //聚类中的点的数量
+                // 聚类中的点的数量
                 size_t list_size = list.get_list_size();
 
                 std::unique_ptr<bool[]> if_skip = std::make_unique<bool[]>(list_size);
@@ -962,14 +1111,15 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                     stats->total_count += list_size;
                 }
 
-                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(), list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
+                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
+                                   list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
                                    list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
-                                   list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(), list.get_sub_farest_IP_dis(),
-                                   list.get_sub_nearest_L2_id(), list.get_sub_nearest_L2_dis(), if_skip.get(), simi, idxi,
-                                   stats, centroid_codes.get() + listids[j] * d);
+                                   list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(),
+                                   list.get_sub_farest_IP_dis(), list.get_sub_nearest_L2_id(),
+                                   list.get_sub_nearest_L2_dis(), if_skip.get(), simi, idxi, stats,
+                                   centroid_codes.get() + listids[j] * d);
             }
-        } 
-        else {
+        } else {
             for (size_t j = 0; j < nprobe; j++) {
                 IVF& list = lists[listids[j]];
                 const float* candidate2centroid = list.get_candidate2centroid();
@@ -1003,7 +1153,8 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                         stats->total_count += list_size;
                     }
                 }
-                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(), simi, idxi);
+                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
+                                   simi, idxi);
             }
         }
         sort_result(metric, k, simi, idxi);
@@ -1013,11 +1164,11 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
         centroids2query += nprobe;
         listids += nprobe;
     }
-    
 }
 
-Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, bool blockVersion) {
-    if(blockVersion) 
+Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
+                    bool blockVersion) {
+    if (blockVersion)
         std::cout << BLUE << "block version of search" << RESET << std::endl;
     if (n == 0) {
         return Stats();
@@ -1032,7 +1183,7 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     // distance是最终结果，是nq个k维的float向量，每一个float对应着和一个相近向量的距离, labels是对应相近向量的id
     // 在distance内部的每一行，对应着一个查询，将其看作一个容量为k的优先队列
     init_result(metric, n * k, distances, labels);
-    if(blockVersion) {
+    if (blockVersion) {
         single_thread_search_block(n, queries, k, distances, labels);
         return Stats();
     }
@@ -1042,7 +1193,7 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     std::vector<Stats> stats(nt);
 
     cout << YELLOW << "original version of search" << endl;
-    //把n个查询交给多线程
+    // 把n个查询交给多线程
 #pragma omp parallel for num_threads(nt)
     for (size_t i = 0; i < nt; i++) {
         size_t start, end;
@@ -1054,8 +1205,10 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
             end = start + batch_size;
         }
         if (start < end) {
-            //end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k 是结果存放的起始位置
-            single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio, &stats[i]);
+            // end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k
+            // 是结果存放的起始位置
+            single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
+                                 &stats[i]);
         }
     }
 
@@ -1120,7 +1273,8 @@ void Index::load_index(std::string path) {
         lists[listid].load_IVF(in);
         if (watch.elapsedSeconds() > 2) {
             watch.reset();
-            std::cout << std::format("loaded list {}/{}, size {}", listid, nlist, lists[listid].get_list_size()) << std::endl;
+            std::cout << std::format("loaded list {}/{}, size {}", listid, nlist, lists[listid].get_list_size())
+                      << std::endl;
         }
     }
 }
