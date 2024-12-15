@@ -97,14 +97,56 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool syn
     }
     watch.print("malloc blockBuffer");
 
+    // Search顺序
     workerSearchBlockOrder = vector<vector<idx_t>>(workerCount + 1);
+    size_t gap = (blockCount + workerCount - 1) / workerCount;
     for (size_t i = 1; i <= workerCount; i++) {
         workerSearchBlockOrder[i] = vector<idx_t>(blockCount);
-        for (size_t j = 0; j < blockCount; j++) {
-            workerSearchBlockOrder[i][j] = j;
+        for (size_t block = 0; block < blockCount; block++) {
+            size_t order = (block + (gap * (i - 1))) % blockCount;
+            workerSearchBlockOrder[i][order] = block;
         }
         MPI_Send(workerSearchBlockOrder[i].data(), blockCount, MPI_INT64_T, i, 0, MPI_COMM_WORLD);
     }
+
+    //对于每一个块，其搜索的顺序，即一系列rank
+    auto blockSearchedOrder = vector<vector<idx_t>>(blockCount);
+    for (size_t i = 0; i < blockCount; i++) {
+        blockSearchedOrder[i] = vector<idx_t>();
+    }
+    for (size_t order = 0; order < blockCount; order++) {
+        for(size_t rank = 1; rank <= workerCount; rank++) {
+            size_t block = workerSearchBlockOrder[rank][order]; 
+            blockSearchedOrder[block].push_back(rank);
+        }
+    }
+    for (size_t i = 0; i < blockCount; i++) {
+        printVector(blockSearchedOrder[i], BLUE);
+    }
+
+    //每一个worker，应该将某个block传递给下一个worker的rank
+    auto sendNextWorker = vector<vector<idx_t>>(workerCount + 1);
+    auto recvPrevWorker = vector<vector<idx_t>>(workerCount + 1);
+    for (size_t i = 1; i <= workerCount; i++) {
+        sendNextWorker[i] = vector<idx_t>(blockCount, 0);
+        recvPrevWorker[i] = vector<idx_t>(blockCount, 0);
+    }
+    for (size_t block = 0; block < blockCount; block++) {
+        for (size_t rankOrder = 0; rankOrder < workerCount - 1; rankOrder++) {
+           size_t senderRank = blockSearchedOrder[block][rankOrder];
+           size_t recvRank = blockSearchedOrder[block][rankOrder + 1];
+           sendNextWorker[senderRank][block] = recvRank;  
+           recvPrevWorker[recvRank][block] = senderRank;  
+        }
+    }
+    for(size_t rank = 1; rank <= workerCount; rank++) {
+        printVector(sendNextWorker[rank], BLUE);
+    }
+    for(size_t rank = 1; rank <= workerCount; rank++) {
+        printVector(recvPrevWorker[rank], BLUE);
+    }
+    watch.print("ordering");
+
 }
 
 Index& Index::operator=(Index&& other) noexcept {
@@ -842,9 +884,13 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     warmUpSearch(n, queries, k, distances, labels, listidqueries.get());
     watch.print("warmupSearch");
 
-    // for (size_t i = 0; i < n; i++) {
-    //     cout << i << "maxheap: " << distances[i * k] << endl;
-    // }
+    // 最大堆
+    std::unique_ptr<float[]> heapTops = std::make_unique<float[]>(n);
+    for(size_t i = 0; i < n; i++) {
+        heapTops[i] = distances[i * k];
+    }
+    watch.print("init heapTops");
+    
     // 算出每个查询向量一共要和多少个向量比较
     std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n);
 #pragma omp parallel for
@@ -884,6 +930,11 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     MPI_Bcast(queryCompareSizePreSum.get(), (n + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
 
     watch.print("BroadCast queryCompareSize");
+
+    // 最大堆广播
+    MPI_Bcast(heapTops.get(), n, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    watch.print("BroadCast heaptops");
+
 
     if (presumeTotalQueryCompareSize < totalQueryCompareSize) {
         distancesForNQuerys = std::make_unique<float[]>(totalQueryCompareSize);

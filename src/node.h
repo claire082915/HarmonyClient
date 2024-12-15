@@ -61,6 +61,7 @@ public:
     std::unique_ptr<size_t[]> queryCompareSize;  // nq * nprobe 查询向量相近的聚类id
     // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
     std::unique_ptr<size_t[]> queryCompareSizePreSum;
+    std::unique_ptr<float[]> heapTops;
 
     // 每一块的计算结果的临时存储
     vector<std::unique_ptr<float[]>> distancesForBlocks;
@@ -79,10 +80,10 @@ public:
         // cout << CRAN << "start init" << rank << RESET << endl;
         this->rank = rank;
 
-        // 1. InitInfo
+        // InitInfo
         MPI_Bcast(&info, sizeof(InitInfo), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-        // 2. IVF的大小，IVF的向量表示
+        // IVF的大小，IVF的向量表示
         listSizes = std::make_unique<size_t[]>(info.nlist);
         MPI_Bcast(listSizes.get(), info.nlist * sizeof(size_t), MPI_BYTE, 0, MPI_COMM_WORLD);
         auto listCodesBuffer = vector<std::unique_ptr<float[]>>(info.nlist);
@@ -92,23 +93,35 @@ public:
         }
         addIVFs(listCodesBuffer);
 
-        // 3. nq, querys
+        // Search顺序
+        blockSearchOrder = std::make_unique<idx_t[]>(info.blockCount);   // search block的顺序，第i个元素是第i个要进行search的blockId
+        MPI_Recv(blockSearchOrder.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        // cout << "Q" << rank << endl;
+        // printVector(blockSearchOrder.get(), info.blockCount, BLUE);
+
+        // nq, querys
         MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
         std::unique_ptr<float[]> querysBuffer = std::make_unique<float[]>(nq * info.d);
         MPI_Bcast(querysBuffer.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
         addQuerys(querysBuffer.get(), nq);
 
-        // 4. query最近的nprobe个聚类中心的id
+        // query最近的nprobe个聚类中心的id
         listidqueries = std::make_unique<idx_t[]>(nq * info.nprobe);  // 最近的nprobe个聚类中心的id
         MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
 
-        // 5. queryCompareSize,queryCompareSizePreSum
+        // queryCompareSize,queryCompareSizePreSum
         queryCompareSize = std::make_unique<size_t[]>(nq);
         MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
         queryCompareSizePreSum = std::make_unique<size_t[]>(nq + 1);
         MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
 
-        // 6.其他初始化
+        // 最大堆
+        heapTops = std::make_unique<float[]>(nq);
+        MPI_Bcast(heapTops.get(), nq, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        // for(int i = 0; i < nq; i++) {
+        //     cout << format("Q{}, top{}", i, heapTops[i]) << endl;
+        // }
+        // 其他初始化
         blockSize = nq / info.blockCount;
         blockDistancesSize = blockSize * info.nb;
         distancesForBlocks = vector<std::unique_ptr<float[]>>(blockDistancesSize);
@@ -116,10 +129,7 @@ public:
             distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
         }
         // cout << CRAN << "finish init" << rank << RESET << endl;
-        blockSearchOrder = std::make_unique<idx_t[]>(info.blockCount);   // search block的顺序，第i个元素是第i个要进行search的blockId
-        MPI_Recv(blockSearchOrder.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         // cout << RED << rank << RESET << endl;
-        // printVector(blockSearchOrder.get(), info.blockCount, BLUE);
     }
     void preSearchInit() {}
    
@@ -161,6 +171,7 @@ public:
         }
     }
     void searchBlock(size_t blockId) {
+        size_t skip = 0;
 
         auto clock1 = std::chrono::high_resolution_clock::now();
 
@@ -198,6 +209,16 @@ public:
             // cout << curDistancePosition << " " << queryCompareSize[q] << endl;
             assert(curDistancePosition == queryCompareSize[q]);
         }
+// #pragma omp parallel for 
+         for (size_t q = queryStart; q < queryStart + blockSize; q++) {
+            size_t queryOffset =
+                queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
+            for (size_t i = 0; i < queryCompareSize[q]; i++){
+                if(heapTops[q] < distancesForBlocks[blockId][queryOffset + i]) {
+                    skip++;
+                }
+            }
+        }
         // assert(curDistancePosition == totalQueryCompareSize);
         // cout << BLUE;
         // cout << distances.size() << " " << id << endl;
@@ -224,6 +245,8 @@ public:
         //         // return SearchResultInfo(move(distancesForBlocks[blockId]), totalQueryCompareSize, blockId);
         std::cout << "node" << rank << '|' << blockId << "| send"
         << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
+
+        cout << format("node:{} block:{} skip:{:<-10} {:.3f}%", rank, blockId, skip, (double)skip / totalQueryCompareSize * 100) << endl;
     }
 };
 
