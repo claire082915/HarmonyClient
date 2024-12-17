@@ -346,7 +346,20 @@ class Stopwatch {
     // The start time
     std::chrono::time_point<std::chrono::high_resolution_clock> start;
 };
+class MyStopWatch {
+public:
+    Stopwatch watch;
+    bool shouldPrint;
+    MyStopWatch(bool shouldPrint = true) : shouldPrint(shouldPrint) { watch.reset(); }
 
+    void print(std::string s) {
+        if (!shouldPrint) {
+            return;
+        }
+        double time = watch.elapsedSeconds(true);
+        std::cout << GREEN << "[StopWatch:" << std::setw(30) << s << "]:" << time << 's' << RESET << std::endl;
+    }
+};
 // V0
 //  inline float calculatedEuclideanDistance(const float* vec1, const float* vec2, size_t size) {
 //      // 计算 vec1 和 vec2 的 L2 范数的平方

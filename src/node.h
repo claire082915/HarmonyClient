@@ -72,7 +72,16 @@ public:
 
     MPI_Comm worker_comm;
 
+    //vector的每一个元素对应一个block
+    vector<MPI_Request> infoRequests;
+    vector<MPI_Request> disRequests;
+    vector<MPI_Status> statuses;
+
+    std::unique_ptr<idx_t[]> sendNextWorker; //接受到blockId为i的块的时候，应该发送给rank为sendNextWorker[i]的机器, sendNextWorker[i]=0说明可以发给master
+    std::unique_ptr<idx_t[]> recvPrevWorker; //blockId为i的块应该从rank为recvPrevWorker[i]的机器接收，如果recvPrevWorker[i] = 0, 说明不需要接收, 直接可以算
+
     void init(int rank) {
+        MyStopWatch watch(true);
         MPI_Comm_split(MPI_COMM_WORLD, 1, rank, &worker_comm);
 
         // Synchronize only the worker processes at the barrier
@@ -128,10 +137,22 @@ public:
         for (size_t i = 0; i < info.blockCount; i++) {
             distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
         }
+
+        //初始化sendNextWorker, recvPrevWorker
+        sendNextWorker = std::make_unique<idx_t[]>(info.blockCount);
+        recvPrevWorker = std::make_unique<idx_t[]>(info.blockCount);
+        MPI_Recv(sendNextWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(recvPrevWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        // 初始化request, status, 
+        infoRequests = vector<MPI_Request>(info.blockCount);
+        disRequests = vector<MPI_Request>(info.blockCount);
+        statuses = vector<MPI_Status>(info.blockCount);
         // cout << CRAN << "finish init" << rank << RESET << endl;
         // cout << RED << rank << RESET << endl;
+        watch.print(format("Node {} Init", rank));
+
     }
-    void preSearchInit() {}
    
     void addQuerys(const float* querys, size_t nq) {
         this->querys = std::make_unique<float[]>(nq * info.block_dim);
@@ -150,25 +171,39 @@ public:
             cout << BLUE << formatted_string << RESET << endl;
         }
     };
+    
     enum SearchResultTag {
         INFO,
         DISTANCES,
+        CUTIDS,
     };
     SearchResultInfo resultInfo;
 
     void search() {
-        if(info.sync) {
-            cout << YELLOW << "Sync On" << RESET << endl;
-        } else {
-            // cout << YELLOW << "Sync Off" << RESET << endl;
-        }
-        for (size_t i = 0; i < info.blockCount; i++) {
-            idx_t blockId = blockSearchOrder[i];
-            searchBlock(blockId);
-            if(info.sync) {
-                MPI_Barrier(worker_comm);
+
+        for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
+            if(recvPrevWorker[blockId] != 0) {
+                searchBlock(blockId);
+            } else {
+                size_t sender = recvPrevWorker[blockId];
+                // size
+                idx_t size;
+                // tag 当做blockId
+                MPI_Irecv(distancesForBlocks[blockId].get(), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
             }
         }
+
+        //不断查
+        for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
+            MPI_Test(&requests_vector[j], &vector_received, &statuses_vector[j]) && vector_received
+        }
+
+
+    }
+    size_t getTotalQueryCompareSize(size_t blockId) {
+        size_t queryStart = blockId * blockSize;
+        size_t totalQueryCompareSize = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
+        return totalQueryCompareSize;
     }
     void searchBlock(size_t blockId) {
         size_t skip = 0;
@@ -176,8 +211,8 @@ public:
         auto clock1 = std::chrono::high_resolution_clock::now();
 
         size_t queryStart = blockId * blockSize;
-        size_t totalQueryCompareSize =
-            queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
+        size_t totalQueryCompareSize = getTotalQueryCompareSize(blockId);
+            
         // cout << RED << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
         //      << endl;
 

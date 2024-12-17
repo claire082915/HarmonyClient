@@ -21,20 +21,7 @@
 
 namespace tribase {
 
-class MyStopWatch {
-public:
-    Stopwatch watch;
-    bool shouldPrint;
-    MyStopWatch(bool shouldPrint = true) : shouldPrint(shouldPrint) { watch.reset(); }
 
-    void print(std::string s) {
-        if (!shouldPrint) {
-            return;
-        }
-        double time = watch.elapsedSeconds(true);
-        std::cout << GREEN << "[StopWatch:" << std::setw(30) << s << "]:" << time << 's' << RESET << std::endl;
-    }
-};
 
 Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel opt_level, size_t sub_k,
              size_t sub_nlist, size_t sub_nprobe, bool verbose, EdgeDevice edge_device_enabled)
@@ -144,6 +131,10 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool syn
     }
     for(size_t rank = 1; rank <= workerCount; rank++) {
         printVector(recvPrevWorker[rank], BLUE);
+    }
+    for(size_t rank = 1; rank <= workerCount; rank++) {
+        MPI_Send(sendNextWorker[rank].data(), blockCount, MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
+        MPI_Send(recvPrevWorker[rank].data(), blockCount, MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
     }
     watch.print("ordering");
 

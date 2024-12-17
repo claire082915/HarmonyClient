@@ -10,6 +10,8 @@
 
 namespace tribase {
 
+
+
 class Index {
    public:
     Index(size_t d = 0,
