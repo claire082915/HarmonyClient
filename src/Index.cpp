@@ -97,7 +97,7 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool syn
     }
 
     //对于每一个块，其搜索的顺序，即一系列rank
-    auto blockSearchedOrder = vector<vector<idx_t>>(blockCount);
+    blockSearchedOrder = vector<vector<idx_t>>(blockCount);
     for (size_t i = 0; i < blockCount; i++) {
         blockSearchedOrder[i] = vector<idx_t>();
     }
@@ -945,22 +945,44 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     // }
     // watch.print("malloc blockBuffer");
 
-    MPI_Status status;
-    Worker::SearchResultInfo resultInfo;
-    size_t _blockCount = blockCount;
-    while (_blockCount--)
-        for (int rank = 1; rank <= workerCount; rank++) {
-            MPI_Recv(&resultInfo, sizeof(Worker::SearchResultInfo), MPI_BYTE, rank, Worker::SearchResultTag::INFO,
-                     MPI_COMM_WORLD, &status);
-            // cout <<queryCompareSizeForBlocks[resultInfo.blockId] * sizeof(float)  << endl;
-            MPI_Recv(blockDistancesBuffer[resultInfo.blockId].get(), queryCompareSizeForBlocks[resultInfo.blockId],
-                     MPI_FLOAT, rank, Worker::SearchResultTag::DISTANCES, MPI_COMM_WORLD, &status);
-            // resultInfo.print();
-            size_t q = resultInfo.blockId * blockSize;
-            size_t queryOffset = queryCompareSizePreSum[q];
-            add_n(blockDistancesBuffer[resultInfo.blockId].get(), distancesForNQuerys.get() + queryOffset,
-                  distancesForNQuerys.get() + queryOffset, resultInfo.size);
-        }
+    // MPI_Status status;
+    // Worker::SearchResultInfo resultInfo;
+    // size_t _blockCount = blockCount;
+    // while (_blockCount--)
+    //     for (int rank = 1; rank <= workerCount; rank++) {
+    //         MPI_Recv(&resultInfo, sizeof(Worker::SearchResultInfo), MPI_BYTE, rank, Worker::SearchResultTag::INFO,
+    //                  MPI_COMM_WORLD, &status);
+    //         // cout <<queryCompareSizeForBlocks[resultInfo.blockId] * sizeof(float)  << endl;
+    //         MPI_Recv(blockDistancesBuffer[resultInfo.blockId].get(), queryCompareSizeForBlocks[resultInfo.blockId],
+    //                  MPI_FLOAT, rank, Worker::SearchResultTag::DISTANCES, MPI_COMM_WORLD, &status);
+    //         // resultInfo.print();
+    //         size_t q = resultInfo.blockId * blockSize;
+    //         size_t queryOffset = queryCompareSizePreSum[q];
+    //         add_n(blockDistancesBuffer[resultInfo.blockId].get(), distancesForNQuerys.get() + queryOffset,
+    //               distancesForNQuerys.get() + queryOffset, resultInfo.size);
+    //     }
+    //     for (int rank = 1; rank <= workerCount; rank++) {
+    //         MPI_Recv(&resultInfo, sizeof(Worker::SearchResultInfo), MPI_BYTE, rank, Worker::SearchResultTag::INFO,
+    //                  MPI_COMM_WORLD, &status);
+    //         // cout <<queryCompareSizeForBlocks[resultInfo.blockId] * sizeof(float)  << endl;
+    //         MPI_Recv(blockDistancesBuffer[resultInfo.blockId].get(), queryCompareSizeForBlocks[resultInfo.blockId],
+    //                  MPI_FLOAT, rank, Worker::SearchResultTag::DISTANCES, MPI_COMM_WORLD, &status);
+    //         // resultInfo.print();
+    //         size_t q = resultInfo.blockId * blockSize;
+    //         size_t queryOffset = queryCompareSizePreSum[q];
+    //         add_n(blockDistancesBuffer[resultInfo.blockId].get(), distancesForNQuerys.get() + queryOffset,
+    //               distancesForNQuerys.get() + queryOffset, resultInfo.size);
+    //     }
+#pragma omp parallel for
+    for(size_t blockId = 0; blockId < blockCount; blockId++) {
+        size_t senderRank = blockSearchedOrder[blockId][blockSearchedOrder[blockId].size() - 1];
+        size_t q = blockId * blockSize;
+        size_t queryOffset = queryCompareSizePreSum[q];
+        cout << format("master waiting for block({}) from node({})", blockId, senderRank) << endl;
+        MPI_Recv(distancesForNQuerys.get() + queryOffset, queryCompareSizeForBlocks[blockId],
+                     MPI_FLOAT, senderRank, blockId, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        cout << format("master received block({}) from node({})", blockId, senderRank) << endl;
+    }
     watch.print("searchblock");
     // MPI_Recv(&resultInfo, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE, Node::SearchResultTag::INFO,
     // MPI_COMM_WORLD, &status); MPI_Recv(&blockDistances, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE,

@@ -76,6 +76,7 @@ class Index {
     std::unique_ptr<float[]> distancesResultBuffer;
     std::vector<std::unique_ptr<float[]>> blockDistancesBuffer;
     std::vector<vector<idx_t>> workerSearchBlockOrder; //每一个worker对应的计算block的id排序
+    std::vector<vector<idx_t>> blockSearchedOrder; 
     size_t warmUpSearchList = 0;
     size_t warmUpSearchListSize = 0;
 

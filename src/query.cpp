@@ -33,7 +33,7 @@ int workerMain(int rank) {
     node.init(rank);
     node.search();
     // for(size_t i = 0; i < node.info.blockCount; i++) {
-        // node.search(i);
+    //     node.searchBlock(i);
     // }
     return 0;
 }
@@ -570,7 +570,7 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-    cout << CRAN << "return node:" << rank << RESET << endl;
     MPI_Finalize();
+    cout << CRAN << "return node:" << rank << RESET << endl;
     return 0;
 }

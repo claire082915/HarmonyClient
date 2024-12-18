@@ -73,9 +73,9 @@ public:
     MPI_Comm worker_comm;
 
     //vector的每一个元素对应一个block
-    vector<MPI_Request> infoRequests;
+    // vector<MPI_Request> infoRequests;
     vector<MPI_Request> disRequests;
-    vector<MPI_Status> statuses;
+    // vector<MPI_Status> statuses;
 
     std::unique_ptr<idx_t[]> sendNextWorker; //接受到blockId为i的块的时候，应该发送给rank为sendNextWorker[i]的机器, sendNextWorker[i]=0说明可以发给master
     std::unique_ptr<idx_t[]> recvPrevWorker; //blockId为i的块应该从rank为recvPrevWorker[i]的机器接收，如果recvPrevWorker[i] = 0, 说明不需要接收, 直接可以算
@@ -145,9 +145,9 @@ public:
         MPI_Recv(recvPrevWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
         // 初始化request, status, 
-        infoRequests = vector<MPI_Request>(info.blockCount);
+        // infoRequests = vector<MPI_Request>(info.blockCount);
         disRequests = vector<MPI_Request>(info.blockCount);
-        statuses = vector<MPI_Status>(info.blockCount);
+        // statuses = vector<MPI_Status>(info.blockCount);
         // cout << CRAN << "finish init" << rank << RESET << endl;
         // cout << RED << rank << RESET << endl;
         watch.print(format("Node {} Init", rank));
@@ -181,22 +181,42 @@ public:
 
     void search() {
 
+        int searchedBlockCount = 0;
+        vector<bool> isBlockSearched = vector<bool>(info.blockCount);
         for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
-            if(recvPrevWorker[blockId] != 0) {
+            if(recvPrevWorker[blockId] == 0) {
                 searchBlock(blockId);
+                isBlockSearched[blockId] = true;
+                searchedBlockCount++;
             } else {
                 size_t sender = recvPrevWorker[blockId];
                 // size
                 idx_t size;
                 // tag 当做blockId
                 MPI_Irecv(distancesForBlocks[blockId].get(), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
+                cout << format("node({}) waiting for block({}) from node({})", rank, blockId, sender) << endl;
             }
         }
 
         //不断查
+        while(searchedBlockCount < info.blockCount)
         for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
-            MPI_Test(&requests_vector[j], &vector_received, &statuses_vector[j]) && vector_received
+            if(isBlockSearched[blockId]) {
+                continue;
+            }
+            int isReceived;
+            MPI_Status stat;
+            MPI_Test(&disRequests[blockId], &isReceived, &stat);
+            if(isReceived) {
+                cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
+                searchBlock(blockId);
+                searchedBlockCount++;
+                isBlockSearched[blockId] = true;
+            } else {
+                // cout << format("node({}) not receving block({})",rank, blockId) << endl;
+            }
         }
+        cout << CRAN << "Search Finished" << rank << RESET << endl;
 
 
     }
@@ -213,8 +233,9 @@ public:
         size_t queryStart = blockId * blockSize;
         size_t totalQueryCompareSize = getTotalQueryCompareSize(blockId);
             
-        // cout << RED << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
-        //      << endl;
+        cout << RED << rank << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
+             << endl;
+
 
         if (totalQueryCompareSize > blockDistancesSize) {
             cerr << "Error search" << endl;
@@ -237,7 +258,7 @@ public:
                                                             info.block_dim);
                     // cout << " " << queryOffset + curDistancePosition  << endl;
                     assert(queryOffset + curDistancePosition < totalQueryCompareSize);
-                    distancesForBlocks[blockId][queryOffset + curDistancePosition] = dis;
+                    distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
                     curDistancePosition++;
                 }
             }
@@ -254,34 +275,24 @@ public:
                 }
             }
         }
-        // assert(curDistancePosition == totalQueryCompareSize);
-        // cout << BLUE;
-        // cout << distances.size() << " " << id << endl;
-        // for(auto vec : distances) {
-        //     cout << vec.size() << ": ";
-        //     for(float f : vec) {
-        //         cout << f << " ";
-        //     }
-        //     cout << endl;
-        // }
-        // cout << RESET;
 
         // malloc0.3s, search0.9s
         auto clock2 = std::chrono::high_resolution_clock::now();
-        std::cout << "node" << rank << '|' << blockId << "| search"
-        << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
+        // std::cout << "node" << rank << '|' << blockId << "| search"
+        // << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
         resultInfo = SearchResultInfo(totalQueryCompareSize, blockId);
         auto clock3 = std::chrono::high_resolution_clock::now();
-        MPI_Send(&resultInfo, sizeof(SearchResultInfo), MPI_BYTE, 0, SearchResultTag::INFO, MPI_COMM_WORLD);
+        // MPI_Send(&resultInfo, sizeof(SearchResultInfo), MPI_BYTE, sendNextWorker[blockId], SearchResultTag::INFO, MPI_COMM_WORLD);
         // cout << totalQueryCompareSize * sizeof(float) << endl;
         
-        MPI_Send(distancesForBlocks[blockId].get(), totalQueryCompareSize, MPI_FLOAT, 0, SearchResultTag::DISTANCES,
+        cout << format("node({}) send block({}) to node({})", rank, blockId, sendNextWorker[blockId]) << endl;
+        MPI_Send(distancesForBlocks[blockId].get(), totalQueryCompareSize, MPI_FLOAT, sendNextWorker[blockId], blockId,
                  MPI_COMM_WORLD);
         //         // return SearchResultInfo(move(distancesForBlocks[blockId]), totalQueryCompareSize, blockId);
-        std::cout << "node" << rank << '|' << blockId << "| send"
-        << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
+        // std::cout << "node" << rank << '|' << blockId << "| send"
+        // << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
 
-        cout << format("node:{} block:{} skip:{:<-10} {:.3f}%", rank, blockId, skip, (double)skip / totalQueryCompareSize * 100) << endl;
+        // cout << format("node:{} block:{} skip:{:<-10} {:.3f}%", rank, blockId, skip, (double)skip / totalQueryCompareSize * 100) << endl;
     }
 };
 
