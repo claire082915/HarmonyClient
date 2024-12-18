@@ -359,6 +359,9 @@ public:
         double time = watch.elapsedSeconds(true);
         std::cout << GREEN << "[StopWatch:" << std::setw(30) << s << "]:" << time << 's' << RESET << std::endl;
     }
+    void reset() {
+        watch.reset();
+    }
 };
 // V0
 //  inline float calculatedEuclideanDistance(const float* vec1, const float* vec2, size_t size) {

@@ -194,11 +194,12 @@ public:
                 idx_t size;
                 // tag 当做blockId
                 MPI_Irecv(distancesForBlocks[blockId].get(), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
-                cout << format("node({}) waiting for block({}) from node({})", rank, blockId, sender) << endl;
+                // cout << format("node({}) waiting for block({}) from node({})", rank, blockId, sender) << endl;
             }
         }
 
         //不断查
+        MyStopWatch watch(true);
         while(searchedBlockCount < info.blockCount)
         for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
             if(isBlockSearched[blockId]) {
@@ -208,8 +209,10 @@ public:
             MPI_Status stat;
             MPI_Test(&disRequests[blockId], &isReceived, &stat);
             if(isReceived) {
-                cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
+                // cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
+                watch.print(format("node {} wait", rank));
                 searchBlock(blockId);
+                watch.reset();
                 searchedBlockCount++;
                 isBlockSearched[blockId] = true;
             } else {
@@ -226,15 +229,15 @@ public:
         return totalQueryCompareSize;
     }
     void searchBlock(size_t blockId) {
-        size_t skip = 0;
+        MyStopWatch searchWatch(true);
 
         auto clock1 = std::chrono::high_resolution_clock::now();
 
         size_t queryStart = blockId * blockSize;
         size_t totalQueryCompareSize = getTotalQueryCompareSize(blockId);
             
-        cout << RED << rank << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
-             << endl;
+        // cout << RED << rank << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
+        //      << endl;
 
 
         if (totalQueryCompareSize > blockDistancesSize) {
@@ -244,7 +247,9 @@ public:
 
         size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), blockSize);
         // cout << nt << endl;
-#pragma omp parallel for num_threads(nt)
+        size_t skip = 0;
+#pragma omp parallel for num_threads(nt) reduction(+:skip)
+// #pragma omp parallel for num_threads(nt)
         for (size_t q = queryStart; q < queryStart + blockSize; q++) {
             size_t queryOffset =
                 queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
@@ -253,6 +258,21 @@ public:
             for (size_t i = 0; i < info.nprobe; i++) {
                 idx_t ivfId = listidqueries[q * info.nprobe + i];
                 for (size_t v = 0; v < listSizes[ivfId]; v++) {
+                    // if(distancesForBlocks[blockId][queryOffset + curDistancePosition] == INFINITY) {
+                    //     skip++;
+                    // } else {
+                    //     float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
+                    //                                             listCodes[ivfId].get() + v * info.block_dim,
+                    //                                             info.block_dim);
+                    //     // cout << " " << queryOffset + curDistancePosition  << endl;
+                        
+                    //     // assert(queryOffset + curDistancePosition < totalQueryCompareSize);
+                    //     distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
+                    //     if (distancesForBlocks[blockId][queryOffset + curDistancePosition] > heapTops[q]) {
+                    //         distancesForBlocks[blockId][queryOffset + curDistancePosition] = INFINITY;
+                    //     }
+                    // }
+                    // curDistancePosition++;
                     float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
                                                             listCodes[ivfId].get() + v * info.block_dim,
                                                             info.block_dim);
@@ -260,21 +280,22 @@ public:
                     assert(queryOffset + curDistancePosition < totalQueryCompareSize);
                     distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
                     curDistancePosition++;
+                    
                 }
             }
             // cout << curDistancePosition << " " << queryCompareSize[q] << endl;
             assert(curDistancePosition == queryCompareSize[q]);
         }
 // #pragma omp parallel for 
-         for (size_t q = queryStart; q < queryStart + blockSize; q++) {
-            size_t queryOffset =
-                queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
-            for (size_t i = 0; i < queryCompareSize[q]; i++){
-                if(heapTops[q] < distancesForBlocks[blockId][queryOffset + i]) {
-                    skip++;
-                }
-            }
-        }
+        //  for (size_t q = queryStart; q < queryStart + blockSize; q++) {
+        //     size_t queryOffset =
+        //         queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
+        //     for (size_t i = 0; i < queryCompareSize[q]; i++){
+        //         if(heapTops[q] < distancesForBlocks[blockId][queryOffset + i]) {
+        //             skip++;
+        //         }
+        //     }
+        // }
 
         // malloc0.3s, search0.9s
         auto clock2 = std::chrono::high_resolution_clock::now();
@@ -285,14 +306,15 @@ public:
         // MPI_Send(&resultInfo, sizeof(SearchResultInfo), MPI_BYTE, sendNextWorker[blockId], SearchResultTag::INFO, MPI_COMM_WORLD);
         // cout << totalQueryCompareSize * sizeof(float) << endl;
         
-        cout << format("node({}) send block({}) to node({})", rank, blockId, sendNextWorker[blockId]) << endl;
+        // cout << format("node({}) send block({}) to node({})", rank, blockId, sendNextWorker[blockId]) << endl;
         MPI_Send(distancesForBlocks[blockId].get(), totalQueryCompareSize, MPI_FLOAT, sendNextWorker[blockId], blockId,
                  MPI_COMM_WORLD);
         //         // return SearchResultInfo(move(distancesForBlocks[blockId]), totalQueryCompareSize, blockId);
         // std::cout << "node" << rank << '|' << blockId << "| send"
         // << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
 
-        // cout << format("node:{} block:{} skip:{:<-10} {:.3f}%", rank, blockId, skip, (double)skip / totalQueryCompareSize * 100) << endl;
+        cout << format("node:{} block:{} skip:{:<-10} {:.1f}%", rank, blockId, skip, (double)skip / totalQueryCompareSize * 100) << endl;
+        searchWatch.print(format("node({}) search block({})", rank, blockId));
     }
 };
 
