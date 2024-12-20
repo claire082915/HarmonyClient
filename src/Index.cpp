@@ -107,9 +107,9 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool syn
             blockSearchedOrder[block].push_back(rank);
         }
     }
-    for (size_t i = 0; i < blockCount; i++) {
-        printVector(blockSearchedOrder[i], BLUE);
-    }
+    // for (size_t i = 0; i < blockCount; i++) {
+    //     printVector(blockSearchedOrder[i], BLUE);
+    // }
 
     //每一个worker，应该将某个block传递给下一个worker的rank
     auto sendNextWorker = vector<vector<idx_t>>(workerCount + 1);
@@ -126,12 +126,12 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool syn
            recvPrevWorker[recvRank][block] = senderRank;  
         }
     }
-    for(size_t rank = 1; rank <= workerCount; rank++) {
-        printVector(sendNextWorker[rank], BLUE);
-    }
-    for(size_t rank = 1; rank <= workerCount; rank++) {
-        printVector(recvPrevWorker[rank], BLUE);
-    }
+    // for(size_t rank = 1; rank <= workerCount; rank++) {
+    //     printVector(sendNextWorker[rank], BLUE);
+    // }
+    // for(size_t rank = 1; rank <= workerCount; rank++) {
+    //     printVector(recvPrevWorker[rank], BLUE);
+    // }
     for(size_t rank = 1; rank <= workerCount; rank++) {
         MPI_Send(sendNextWorker[rank].data(), blockCount, MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
         MPI_Send(recvPrevWorker[rank].data(), blockCount, MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
@@ -932,71 +932,29 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     }
     watch.print("might malloc distancesForNquerys");
 
-    // 计算每一个block中查询向量比较的个数
 
-    // printVector(queryCompareSizeForBlocks.get(), blockCount, YELLOW);
+    //重置由于warmup导致的heap已经有了一些值
+    init_result(METRIC_L2, n * k, distances, labels);
 
-    // 利用tag，先接受长度，再接受结果数组
-
-    // std::unique_ptr<size_t[]> queryCompareSize = std::make_unique<size_t[]>(n);
-    // auto blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount);
-    // for(size_t i = 0; i < blockCount; i++) {
-    //     blockDistancesBuffer[i] = std::make_unique<float[]>(queryCompareSizeForBlocks[i]);
-    // }
-    // watch.print("malloc blockBuffer");
-
-    // MPI_Status status;
-    // Worker::SearchResultInfo resultInfo;
-    // size_t _blockCount = blockCount;
-    // while (_blockCount--)
-    //     for (int rank = 1; rank <= workerCount; rank++) {
-    //         MPI_Recv(&resultInfo, sizeof(Worker::SearchResultInfo), MPI_BYTE, rank, Worker::SearchResultTag::INFO,
-    //                  MPI_COMM_WORLD, &status);
-    //         // cout <<queryCompareSizeForBlocks[resultInfo.blockId] * sizeof(float)  << endl;
-    //         MPI_Recv(blockDistancesBuffer[resultInfo.blockId].get(), queryCompareSizeForBlocks[resultInfo.blockId],
-    //                  MPI_FLOAT, rank, Worker::SearchResultTag::DISTANCES, MPI_COMM_WORLD, &status);
-    //         // resultInfo.print();
-    //         size_t q = resultInfo.blockId * blockSize;
-    //         size_t queryOffset = queryCompareSizePreSum[q];
-    //         add_n(blockDistancesBuffer[resultInfo.blockId].get(), distancesForNQuerys.get() + queryOffset,
-    //               distancesForNQuerys.get() + queryOffset, resultInfo.size);
-    //     }
-    //     for (int rank = 1; rank <= workerCount; rank++) {
-    //         MPI_Recv(&resultInfo, sizeof(Worker::SearchResultInfo), MPI_BYTE, rank, Worker::SearchResultTag::INFO,
-    //                  MPI_COMM_WORLD, &status);
-    //         // cout <<queryCompareSizeForBlocks[resultInfo.blockId] * sizeof(float)  << endl;
-    //         MPI_Recv(blockDistancesBuffer[resultInfo.blockId].get(), queryCompareSizeForBlocks[resultInfo.blockId],
-    //                  MPI_FLOAT, rank, Worker::SearchResultTag::DISTANCES, MPI_COMM_WORLD, &status);
-    //         // resultInfo.print();
-    //         size_t q = resultInfo.blockId * blockSize;
-    //         size_t queryOffset = queryCompareSizePreSum[q];
-    //         add_n(blockDistancesBuffer[resultInfo.blockId].get(), distancesForNQuerys.get() + queryOffset,
-    //               distancesForNQuerys.get() + queryOffset, resultInfo.size);
-    //     }
+    bool first = false;
+    MyStopWatch loadWatch; //负载均衡
 #pragma omp parallel for
     for(size_t blockId = 0; blockId < blockCount; blockId++) {
         size_t senderRank = blockSearchedOrder[blockId][blockSearchedOrder[blockId].size() - 1];
         size_t q = blockId * blockSize;
         size_t queryOffset = queryCompareSizePreSum[q];
-        cout << format("master waiting for block({}) from node({})", blockId, senderRank) << endl;
+        // cout << format("master waiting for block({}) from node({})", blockId, senderRank) << endl;
         MPI_Recv(distancesForNQuerys.get() + queryOffset, queryCompareSizeForBlocks[blockId],
                      MPI_FLOAT, senderRank, blockId, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        cout << format("master received block({}) from node({})", blockId, senderRank) << endl;
+        // cout << format("master received block({}) from node({})", blockId, senderRank) << endl;
+        if(first == false) {
+            first = true;
+            loadWatch.reset();
+        }
     }
+    loadWatch.print("Load Balance Time(first to Last Block)");
     watch.print("searchblock");
-    // MPI_Recv(&resultInfo, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE, Node::SearchResultTag::INFO,
-    // MPI_COMM_WORLD, &status); MPI_Recv(&blockDistances, sizeof(Node::SearchResultInfo), MPI_BYTE, MPI_ANY_SOURCE,
-    // MPI_ANY_TAG, MPI_COMM_WORLD, &status); size_t nodeId = status.MPI_SOURCE, blockIndex = blockDistances.size; cout
-    // << blockDistances.size() << endl; for(auto& v : blockDistances) {
-    //     printVector(v, GREEN);
-    // }
-    // //加和
-    // add_n(blockDistances.distances.get(), distancesForNQuerys.get() + queryOffset, distancesForNQuerys.get() +
-    // queryOffset, blockDistances.size); auto clockaddEnd = std::chrono::high_resolution_clock::now(); std::cout <<
-    // "add:" << std::chrono::duration<double>(clockaddEnd - clockadd).count() << "s" << std::endl;
-    // printVector(distancesForNQuerys.get() + queryOffset, blockDistances.size, GREEN);
-    // auto clock6 = std::chrono::high_resolution_clock::now();
-    // std::cout << "search:" << std::chrono::duration<double>(clock6 - clock5).count() << "s" << std::endl;
+    
 
 #pragma omp parallel for
     for (size_t q = 0; q < n; q++) {

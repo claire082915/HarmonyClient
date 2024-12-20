@@ -339,8 +339,7 @@ class Stopwatch {
         if (isReset) {
             reset();
         }
-        return ret;
-    }
+        return ret; }
 
    private:
     // The start time
@@ -357,7 +356,11 @@ public:
             return;
         }
         double time = watch.elapsedSeconds(true);
-        std::cout << GREEN << "[StopWatch:" << std::setw(30) << s << "]:" << time << 's' << RESET << std::endl;
+        std::string star = "";
+        if(time > 1) {
+            star = "***";
+        }
+        std::cout << GREEN << format("[StopWatch:{:>30}]:{:.2f}s  {}" ,s, time, star) << RESET << std::endl;
     }
     void reset() {
         watch.reset();

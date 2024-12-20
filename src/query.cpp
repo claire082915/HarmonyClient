@@ -25,19 +25,99 @@ bool str_lower_equal(const std::string& a, const std::string& b) {
 
 
 
-int workerMain(int rank) {
+int workerMain(int rank, bool cut) {
     // cout << "node(" << rank << ") main()" << endl;
     // MPI_Bcast(data.data(), array_size, MPI_INT, 0, MPI_COMM_WORLD);
     
+    
     Worker node;
     node.init(rank);
-    node.search();
+    node.search(cut);
     // for(size_t i = 0; i < node.info.blockCount; i++) {
     //     node.searchBlock(i);
     // }
     return 0;
 }
 int main(int argc, char* argv[]) {
+    
+    
+    argparse::ArgumentParser program("tribase");
+    program.add_argument("--benchmarks_path")
+        .help("benchmarks path")
+        .default_value(std::string("/home/xuqian/Triangle/benchmarks"));
+    program.add_argument("--dataset").help("dataset name").default_value(std::string("msong"));
+    program.add_argument("--input_format").help("format of the dataset").default_value(std::string("fvecs"));
+    program.add_argument("--output_format").help("format of the output").default_value(std::string("bin"));
+    program.add_argument("--k")
+        .help("number of nearest neighbors")
+        .default_value(100ul)
+        .action([](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--nprobes")
+        .default_value(std::vector<size_t>({0ul}))
+        .nargs(0, 100)
+        .help("number of clusters to search")
+        .scan<'u', size_t>();
+    program.add_argument("--opt_levels")
+        .default_value(std::vector<std::string>({"OPT_NONE", "OPT_TRIANGLE", "OPT_SUBNN_L2", "OPT_SUBNN_IP",
+                                                    "OPT_TRI_SUBNN_L2", "OPT_TRI_SUBNN_IP", "OPT_ALL"}))
+        .nargs(0, 10)
+        .help("optimization levels");
+    program.add_argument("--train_only").default_value(false).implicit_value(true).help("train only");
+    program.add_argument("--cache").default_value(false).implicit_value(true).help("use cached index");
+    program.add_argument("--sub_nprobe_ratio")
+        .default_value(1.0f)
+        .help("ratio of the number of subNNs to the number of clusters")
+        .action([](const std::string& value) -> float { return std::stof(value); });
+    program.add_argument("--metric").default_value("l2").help("metric type");
+    program.add_argument("--run_faiss").default_value(false).implicit_value(true).help("run faiss");
+    program.add_argument("--loop").default_value(1ul).action(
+        [](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--nlist").default_value(0ul).action(
+        [](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--verbose").default_value(false).implicit_value(true).help("verbose");
+    program.add_argument("--ratios")
+        .default_value(std::vector<float>({1.0f}))
+        .nargs(0, 100)
+        .help("search ratio")
+        .scan<'f', float>();
+    program.add_argument("--csv").help("csv result file").default_value(std::string(""));
+    program.add_argument("--dataset_info")
+        .help("only output dataset-info to csv file")
+        .default_value(false)
+        .implicit_value(true);
+    program.add_argument("--early_stop").help("early stop").default_value(false).implicit_value(true);
+    // program.add_argument("--block").help("simple version").default_value(false).implicit_value(true);
+    // program.add_argument("--node")
+    //     .help("number of worker nodes")
+    //     .default_value(0ul)
+    //     .action([](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--block")
+        .help("number of blocks")
+        .default_value(0ul)
+        .action([](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--sync")
+        .help("sync after block search")
+        .default_value(false)
+        .implicit_value(true);
+    program.add_argument("--warmup_list_size")
+        .help("warmup nlist size")
+        .default_value(0ul)
+        .action([](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--warmup_list")
+        .help("warmup nlist")
+        .default_value(0ul)
+        .action([](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--cut")
+        .default_value(false)
+        .implicit_value(true);
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::runtime_error& err) {
+        std::cerr << err.what() << std::endl;
+        std::cerr << program;
+        return 1;
+    }
     int pro;
     // MPI_Init(&argc, &argv);
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &pro);
@@ -48,89 +128,14 @@ int main(int argc, char* argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &workerCount);  
     workerCount--;
-    
-    // cout << "pro" << pro << endl;
-    // cout << "maxnt" << omp_get_max_threads() << endl;
     if (rank != 0) {
-        workerMain(rank);
+        bool cut = program.get<bool>("cut");
+        workerMain(rank, cut);
     } else {
-        MPI_Comm master_comm;
-        MPI_Comm_split(MPI_COMM_WORLD, 2, rank, &master_comm);
+        // MPI_Comm master_comm;
+        // MPI_Comm_split(MPI_COMM_WORLD, 2, rank, &master_comm);
         cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
-        argparse::ArgumentParser program("tribase");
-        program.add_argument("--benchmarks_path")
-            .help("benchmarks path")
-            .default_value(std::string("/home/xuqian/Triangle/benchmarks"));
-        program.add_argument("--dataset").help("dataset name").default_value(std::string("msong"));
-        program.add_argument("--input_format").help("format of the dataset").default_value(std::string("fvecs"));
-        program.add_argument("--output_format").help("format of the output").default_value(std::string("bin"));
-        program.add_argument("--k")
-            .help("number of nearest neighbors")
-            .default_value(100ul)
-            .action([](const std::string& value) -> size_t { return std::stoul(value); });
-        program.add_argument("--nprobes")
-            .default_value(std::vector<size_t>({0ul}))
-            .nargs(0, 100)
-            .help("number of clusters to search")
-            .scan<'u', size_t>();
-        program.add_argument("--opt_levels")
-            .default_value(std::vector<std::string>({"OPT_NONE", "OPT_TRIANGLE", "OPT_SUBNN_L2", "OPT_SUBNN_IP",
-                                                     "OPT_TRI_SUBNN_L2", "OPT_TRI_SUBNN_IP", "OPT_ALL"}))
-            .nargs(0, 10)
-            .help("optimization levels");
-        program.add_argument("--train_only").default_value(false).implicit_value(true).help("train only");
-        program.add_argument("--cache").default_value(false).implicit_value(true).help("use cached index");
-        program.add_argument("--sub_nprobe_ratio")
-            .default_value(1.0f)
-            .help("ratio of the number of subNNs to the number of clusters")
-            .action([](const std::string& value) -> float { return std::stof(value); });
-        program.add_argument("--metric").default_value("l2").help("metric type");
-        program.add_argument("--run_faiss").default_value(false).implicit_value(true).help("run faiss");
-        program.add_argument("--loop").default_value(1ul).action(
-            [](const std::string& value) -> size_t { return std::stoul(value); });
-        program.add_argument("--nlist").default_value(0ul).action(
-            [](const std::string& value) -> size_t { return std::stoul(value); });
-        program.add_argument("--verbose").default_value(false).implicit_value(true).help("verbose");
-        program.add_argument("--ratios")
-            .default_value(std::vector<float>({1.0f}))
-            .nargs(0, 100)
-            .help("search ratio")
-            .scan<'f', float>();
-        program.add_argument("--csv").help("csv result file").default_value(std::string(""));
-        program.add_argument("--dataset_info")
-            .help("only output dataset-info to csv file")
-            .default_value(false)
-            .implicit_value(true);
-        program.add_argument("--early_stop").help("early stop").default_value(false).implicit_value(true);
-        // program.add_argument("--block").help("simple version").default_value(false).implicit_value(true);
-        // program.add_argument("--node")
-        //     .help("number of worker nodes")
-        //     .default_value(0ul)
-        //     .action([](const std::string& value) -> size_t { return std::stoul(value); });
-        program.add_argument("--block")
-            .help("number of blocks")
-            .default_value(0ul)
-            .action([](const std::string& value) -> size_t { return std::stoul(value); });
-        program.add_argument("--sync")
-            .help("sync after block search")
-            .default_value(false)
-            .implicit_value(true);
-        program.add_argument("--warmup_list_size")
-            .help("warmup nlist size")
-            .default_value(0ul)
-            .action([](const std::string& value) -> size_t { return std::stoul(value); });
-        program.add_argument("--warmup_list")
-            .help("warmup nlist")
-            .default_value(0ul)
-            .action([](const std::string& value) -> size_t { return std::stoul(value); });
-
-        try {
-            program.parse_args(argc, argv);
-        } catch (const std::runtime_error& err) {
-            std::cerr << err.what() << std::endl;
-            std::cerr << program;
-            return 1;
-        }
+        
 
         std::vector<size_t> nprobes = program.get<std::vector<size_t>>("nprobes");
         std::vector<std::string> opt_levels_str = program.get<std::vector<std::string>>("opt_levels");
@@ -496,7 +501,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time,
-                            bool blockVersion) {
+                            bool blockVersion, float* distances, idx_t* labels) {
             // std::string simple = blockVersion ? "simple" : "original";
             // std::string output_path =
             // std::format("{}/{}/result/result_nlist_{}_nprobe_{}_opt_{}_k_{}_ratio_{}_{}.{}",
@@ -504,30 +509,24 @@ int main(int argc, char* argv[]) {
             //                                               static_cast<int>(opt_level), k, ratio, output_format,
             //                                               simple);
             // result stored in distance , labels
-            std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
-            std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
 
             if (blockVersion) {
                 // index.initWorkers(workerCount, query.get(), nq, blockCount, nb);
                 index.preSearch(nb, workerCount, blockCount, sync, warmUpSearchList, warmUpSearchListSize);
             }
             if (loop > 1) {
-                index.search(nq, query.get(), k, distances.get(), labels.get(), ratio, blockVersion);
+                index.search(nq, query.get(), k, distances, labels, ratio, blockVersion);
             }
             Stopwatch stopwatch;
             Stats stats;
             for (size_t j = 0; j < loop; j++) {
-                stats = index.search(nq, query.get(), k, distances.get(), labels.get(), ratio, blockVersion);
+                stats = index.search(nq, query.get(), k, distances, labels, ratio, blockVersion);
             }
-            // for(int i = 0; i < nq; i++) {
-            //     std::cout << "Q" << i << " ";
-            //     printVector(ground_truth_I.get() + i * k, k, BLUE);
-            //     printVector(labels.get() + i * k, k, BLUE);
-            // }
-            float recall = calculate_recall(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(),
+            
+            float recall = calculate_recall(labels, distances, ground_truth_I.get(), ground_truth_D.get(),
                                             nq, k, metric);
             float r2 =
-                calculate_r2(labels.get(), distances.get(), ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
+                calculate_r2(labels, distances, ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
             double search_time = stopwatch.elapsedSeconds() / loop;
             stats.simi_ratio = ratio;
             stats.nlist = nlist;
@@ -555,12 +554,23 @@ int main(int argc, char* argv[]) {
             for (const OptLevel& opt_level : opt_levels) {
                 index.opt_level = opt_level;
                 for (float ratio : ratios) {
+                    std::unique_ptr<float[]> distancesB = std::make_unique<float[]>(nq * k);
+                    std::unique_ptr<idx_t[]> labelsB = std::make_unique<idx_t[]>(nq * k);
                     if (block_version) {
-                        doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true);
+                        doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true, distancesB.get(), labelsB.get());
                     }
                     // else {
                     std::cout << YELLOW;
-                    doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false);
+                    std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
+                    std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
+                    doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false, distances.get(), labels.get());
+                    // for(int i = 0; i < nq; i++) {
+                    //     std::cout << "Q" << i << " " << std::endl;
+                    //     printVector(distances.get() + i * k, k, BLUE);
+                    //     printVector(distancesB.get() + i * k, k, BLUE);
+                    //     printVector(labels.get() + i * k, k, BLUE);
+                    //     printVector(labelsB.get() + i * k, k, BLUE);
+                    // }
                     std::cout << RESET;
                     // }
                 }

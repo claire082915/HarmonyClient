@@ -70,7 +70,7 @@ public:
 
     void addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer);
 
-    MPI_Comm worker_comm;
+    // MPI_Comm worker_comm;
 
     //vector的每一个元素对应一个block
     // vector<MPI_Request> infoRequests;
@@ -82,7 +82,7 @@ public:
 
     void init(int rank) {
         MyStopWatch watch(true);
-        MPI_Comm_split(MPI_COMM_WORLD, 1, rank, &worker_comm);
+        // MPI_Comm_split(MPI_COMM_WORLD, 1, rank, &worker_comm);
 
         // Synchronize only the worker processes at the barrier
 
@@ -179,13 +179,13 @@ public:
     };
     SearchResultInfo resultInfo;
 
-    void search() {
-
+    void search(bool cut) {
+        MyStopWatch totalWatch(true);
         int searchedBlockCount = 0;
         vector<bool> isBlockSearched = vector<bool>(info.blockCount);
         for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
             if(recvPrevWorker[blockId] == 0) {
-                searchBlock(blockId);
+                searchBlock(blockId, cut);
                 isBlockSearched[blockId] = true;
                 searchedBlockCount++;
             } else {
@@ -211,7 +211,7 @@ public:
             if(isReceived) {
                 // cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
                 watch.print(format("node {} wait", rank));
-                searchBlock(blockId);
+                searchBlock(blockId, cut);
                 watch.reset();
                 searchedBlockCount++;
                 isBlockSearched[blockId] = true;
@@ -219,17 +219,24 @@ public:
                 // cout << format("node({}) not receving block({})",rank, blockId) << endl;
             }
         }
-        cout << CRAN << "Search Finished" << rank << RESET << endl;
+        totalWatch.print(format("Search Finished node({}), total skip:{:.1f}%", rank, (double)totalSkip / totalCompare * 100));
+
 
 
     }
     size_t getTotalQueryCompareSize(size_t blockId) {
         size_t queryStart = blockId * blockSize;
         size_t totalQueryCompareSize = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
+        if((double)queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart] > INT_MAX) {
+            cerr << RED << "increase block size" << RESET << endl;
+            throw std::invalid_argument("increase block size");
+        }
         return totalQueryCompareSize;
     }
-    void searchBlock(size_t blockId) {
-        MyStopWatch searchWatch(true);
+    idx_t totalSkip = 0;
+    idx_t totalCompare = 0;
+    void searchBlock(size_t blockId, bool cut) {
+        MyStopWatch searchWatch(false);
 
         auto clock1 = std::chrono::high_resolution_clock::now();
 
@@ -258,28 +265,31 @@ public:
             for (size_t i = 0; i < info.nprobe; i++) {
                 idx_t ivfId = listidqueries[q * info.nprobe + i];
                 for (size_t v = 0; v < listSizes[ivfId]; v++) {
-                    // if(distancesForBlocks[blockId][queryOffset + curDistancePosition] == INFINITY) {
-                    //     skip++;
-                    // } else {
-                    //     float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
-                    //                                             listCodes[ivfId].get() + v * info.block_dim,
-                    //                                             info.block_dim);
-                    //     // cout << " " << queryOffset + curDistancePosition  << endl;
-                        
-                    //     // assert(queryOffset + curDistancePosition < totalQueryCompareSize);
-                    //     distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
-                    //     if (distancesForBlocks[blockId][queryOffset + curDistancePosition] > heapTops[q]) {
-                    //         distancesForBlocks[blockId][queryOffset + curDistancePosition] = INFINITY;
-                    //     }
-                    // }
-                    // curDistancePosition++;
-                    float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
-                                                            listCodes[ivfId].get() + v * info.block_dim,
-                                                            info.block_dim);
-                    // cout << " " << queryOffset + curDistancePosition  << endl;
-                    assert(queryOffset + curDistancePosition < totalQueryCompareSize);
-                    distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
-                    curDistancePosition++;
+                    if(cut) {
+                        if(distancesForBlocks[blockId][queryOffset + curDistancePosition] == INFINITY) {
+                            skip++;
+                        } else {
+                            float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
+                                                                    listCodes[ivfId].get() + v * info.block_dim,
+                                                                    info.block_dim);
+                            // cout << " " << queryOffset + curDistancePosition  << endl;
+                            
+                            // assert(queryOffset + curDistancePosition < totalQueryCompareSize);
+                            distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
+                            if (distancesForBlocks[blockId][queryOffset + curDistancePosition] > heapTops[q]) {
+                                distancesForBlocks[blockId][queryOffset + curDistancePosition] = INFINITY;
+                            }
+                        }
+                        curDistancePosition++;
+                    } else {
+                        float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
+                                                                listCodes[ivfId].get() + v * info.block_dim,
+                                                                info.block_dim);
+                        // cout << " " << queryOffset + curDistancePosition  << endl;
+                        assert(queryOffset + curDistancePosition < totalQueryCompareSize);
+                        distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
+                        curDistancePosition++;
+                    }
                     
                 }
             }
@@ -313,8 +323,10 @@ public:
         // std::cout << "node" << rank << '|' << blockId << "| send"
         // << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
 
-        cout << format("node:{} block:{} skip:{:<-10} {:.1f}%", rank, blockId, skip, (double)skip / totalQueryCompareSize * 100) << endl;
-        searchWatch.print(format("node({}) search block({})", rank, blockId));
+        // cout << format("node:{} block:{} skip:{:<-10} {:.1f}%", rank, blockId, skip, (double)skip / totalQueryCompareSize * 100) << endl;
+        totalSkip += skip;
+        totalCompare += totalQueryCompareSize;
+        searchWatch.print(format("node({}) search block({}) skip:{:.1f}%", rank, blockId, (double)skip / totalQueryCompareSize * 100));
     }
 };
 
