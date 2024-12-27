@@ -75,10 +75,13 @@ public:
     //vector的每一个元素对应一个block
     // vector<MPI_Request> infoRequests;
     vector<MPI_Request> disRequests;
+    vector<MPI_Request> sendRequests;
     // vector<MPI_Status> statuses;
 
     std::unique_ptr<idx_t[]> sendNextWorker; //接受到blockId为i的块的时候，应该发送给rank为sendNextWorker[i]的机器, sendNextWorker[i]=0说明可以发给master
     std::unique_ptr<idx_t[]> recvPrevWorker; //blockId为i的块应该从rank为recvPrevWorker[i]的机器接收，如果recvPrevWorker[i] = 0, 说明不需要接收, 直接可以算
+
+    MyStopWatch uniWatch;
 
     void init(int rank) {
         MyStopWatch watch(true);
@@ -88,6 +91,7 @@ public:
 
         // cout << CRAN << "start init" << rank << RESET << endl;
         this->rank = rank;
+
 
         // InitInfo
         MPI_Bcast(&info, sizeof(InitInfo), MPI_BYTE, 0, MPI_COMM_WORLD);
@@ -108,54 +112,95 @@ public:
         // cout << "Q" << rank << endl;
         // printVector(blockSearchOrder.get(), info.blockCount, BLUE);
 
-        // nq, querys
-        MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
-        std::unique_ptr<float[]> querysBuffer = std::make_unique<float[]>(nq * info.d);
-        MPI_Bcast(querysBuffer.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
-        addQuerys(querysBuffer.get(), nq);
+        //提前malloc
+        int presumeNq = 10000;
+        std::unique_ptr<float[]> querysBuffer = std::make_unique<float[]>(presumeNq * info.d);
+        this->querys = std::make_unique<float[]>(presumeNq * info.block_dim);
+        listidqueries = std::make_unique<idx_t[]>(presumeNq * info.nprobe);  // 最近的nprobe个聚类中心的id
+        heapTops = std::make_unique<float[]>(presumeNq);
+        queryCompareSize = std::make_unique<size_t[]>(presumeNq);
+        queryCompareSizePreSum = std::make_unique<size_t[]>(presumeNq + 1);
+        sendNextWorker = std::make_unique<idx_t[]>(info.blockCount);
+        recvPrevWorker = std::make_unique<idx_t[]>(info.blockCount);
 
-        // query最近的nprobe个聚类中心的id
-        listidqueries = std::make_unique<idx_t[]>(nq * info.nprobe);  // 最近的nprobe个聚类中心的id
-        MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
-
-        // queryCompareSize,queryCompareSizePreSum
-        queryCompareSize = std::make_unique<size_t[]>(nq);
-        MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
-        queryCompareSizePreSum = std::make_unique<size_t[]>(nq + 1);
-        MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
-
-        // 最大堆
-        heapTops = std::make_unique<float[]>(nq);
-        MPI_Bcast(heapTops.get(), nq, MPI_FLOAT, 0, MPI_COMM_WORLD);
-        // for(int i = 0; i < nq; i++) {
-        //     cout << format("Q{}, top{}", i, heapTops[i]) << endl;
-        // }
-        // 其他初始化
-        blockSize = nq / info.blockCount;
-        blockDistancesSize = blockSize * info.nb;
-        distancesForBlocks = vector<std::unique_ptr<float[]>>(blockDistancesSize);
+        // blockSize = presumeNq / info.blockCount;
+        blockDistancesSize = presumeNq / info.blockCount * info.nb;
+        distancesForBlocks = vector<std::unique_ptr<float[]>>(info.blockCount);
         for (size_t i = 0; i < info.blockCount; i++) {
             distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
         }
 
+        disRequests = vector<MPI_Request>(info.blockCount);
+        sendRequests = vector<MPI_Request>(info.blockCount);
+
+        MPI_Barrier(MPI_COMM_WORLD); //对应preSearch最后的barrier
+
+        uniWatch = MyStopWatch(false, "uniWatch", MAG);
+        uniWatch.print(format("node {} cross barrier", rank), false);
+
+        // nq, querys
+        MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
+        if(nq > presumeNq) {
+            cerr << "presumeNq is too small" << endl;
+            exit(1);
+        }
+        uniWatch.print(format("node {} nq", rank), false);
+        // std::unique_ptr<float[]> querysBuffer = std::make_unique<float[]>(nq * info.d);
+        // uniWatch.print(format("node {} nq querys buffer alloc", rank), false);
+        MPI_Bcast(querysBuffer.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        uniWatch.print(format("node {} querys", rank), false);
+        addQuerys(querysBuffer.get(), nq);
+        uniWatch.print(format("node {} addQuerys", rank), false);
+
+        // query最近的nprobe个聚类中心的id
+        // listidqueries = std::make_unique<idx_t[]>(nq * info.nprobe);  // 最近的nprobe个聚类中心的id
+        MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
+        uniWatch.print(format("node {} listidqueries", rank), false);
+
+        // queryCompareSize,queryCompareSizePreSum
+        queryCompareSize = std::make_unique<size_t[]>(nq);
+        MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // queryCompareSizePreSum = std::make_unique<size_t[]>(nq + 1);
+        MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
+        uniWatch.print(format("node {} queryCompareSize", rank), false);
+
+        // 最大堆
+        // heapTops = std::make_unique<float[]>(nq);
+        MPI_Bcast(heapTops.get(), nq, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        uniWatch.print(format("node {} heapTops", rank), false);
+        // for(int i = 0; i < nq; i++) {
+        //     cout << format("Q{}, top{}", i, heapTops[i]) << endl;
+        // }
+
         //初始化sendNextWorker, recvPrevWorker
-        sendNextWorker = std::make_unique<idx_t[]>(info.blockCount);
-        recvPrevWorker = std::make_unique<idx_t[]>(info.blockCount);
+        // sendNextWorker = std::make_unique<idx_t[]>(info.blockCount);
+        // recvPrevWorker = std::make_unique<idx_t[]>(info.blockCount);
         MPI_Recv(sendNextWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         MPI_Recv(recvPrevWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        uniWatch.print(format("node {} sendNextWorker", rank), false);
+
+        // 其他初始化
+        blockSize = nq / info.blockCount;
+        blockDistancesSize = blockSize * info.nb;
+        // distancesForBlocks = vector<std::unique_ptr<float[]>>(blockDistancesSize);
+        // for (size_t i = 0; i < info.blockCount; i++) {
+        //     distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
+        // }
+        uniWatch.print(format("node {} distancesForBlocks", rank), false);
 
         // 初始化request, status, 
         // infoRequests = vector<MPI_Request>(info.blockCount);
-        disRequests = vector<MPI_Request>(info.blockCount);
+        // disRequests = vector<MPI_Request>(info.blockCount);
         // statuses = vector<MPI_Status>(info.blockCount);
         // cout << CRAN << "finish init" << rank << RESET << endl;
         // cout << RED << rank << RESET << endl;
         watch.print(format("Node {} Init", rank));
+        uniWatch.print(format("node {} finish init", rank), false);
 
     }
    
     void addQuerys(const float* querys, size_t nq) {
-        this->querys = std::make_unique<float[]>(nq * info.block_dim);
+        // this->querys = std::make_unique<float[]>(nq * info.block_dim);
         copy_n_partial_vector(querys, this->querys.get(), info.d, info.block_dim, info.block_dim * (rank - 1), nq);
     }
 
@@ -180,6 +225,7 @@ public:
     SearchResultInfo resultInfo;
 
     void search(bool cut) {
+        uniWatch.print(format("node {} search() start", rank), false);
         MyStopWatch totalWatch(true);
         int searchedBlockCount = 0;
         vector<bool> isBlockSearched = vector<bool>(info.blockCount);
@@ -222,6 +268,9 @@ public:
         totalWatch.print(format("Search Finished node({}), total skip:{:.1f}%", rank, (double)totalSkip / totalCompare * 100));
 
 
+        for(int i = 0; i < sendRequests.size(); i++) {
+            MPI_Wait(&sendRequests[i], MPI_STATUS_IGNORE);
+        }
 
     }
     size_t getTotalQueryCompareSize(size_t blockId) {
@@ -236,7 +285,7 @@ public:
     idx_t totalSkip = 0;
     idx_t totalCompare = 0;
     void searchBlock(size_t blockId, bool cut) {
-        MyStopWatch searchWatch(false);
+        MyStopWatch searchWatch(true);
 
         auto clock1 = std::chrono::high_resolution_clock::now();
 
@@ -253,11 +302,12 @@ public:
         }
 
         size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), blockSize);
-        // cout << nt << endl;
+        // cout << "node " << rank << " nt = " << nt << endl;
         size_t skip = 0;
 #pragma omp parallel for num_threads(nt) reduction(+:skip)
 // #pragma omp parallel for num_threads(nt)
         for (size_t q = queryStart; q < queryStart + blockSize; q++) {
+            // cout << "node " << rank << " nt = " << omp_get_num_threads() << endl;
             size_t queryOffset =
                 queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
 
@@ -308,18 +358,26 @@ public:
         // }
 
         // malloc0.3s, search0.9s
-        auto clock2 = std::chrono::high_resolution_clock::now();
+        // auto clock2 = std::chrono::high_resolution_clock::now();
         // std::cout << "node" << rank << '|' << blockId << "| search"
         // << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
         resultInfo = SearchResultInfo(totalQueryCompareSize, blockId);
-        auto clock3 = std::chrono::high_resolution_clock::now();
+        // auto clock3 = std::chrono::high_resolution_clock::now();
         // MPI_Send(&resultInfo, sizeof(SearchResultInfo), MPI_BYTE, sendNextWorker[blockId], SearchResultTag::INFO, MPI_COMM_WORLD);
         // cout << totalQueryCompareSize * sizeof(float) << endl;
         
         // cout << format("node({}) send block({}) to node({})", rank, blockId, sendNextWorker[blockId]) << endl;
-        MPI_Send(distancesForBlocks[blockId].get(), totalQueryCompareSize, MPI_FLOAT, sendNextWorker[blockId], blockId,
-                 MPI_COMM_WORLD);
-        //         // return SearchResultInfo(move(distancesForBlocks[blockId]), totalQueryCompareSize, blockId);
+
+        uniWatch.print(format("ready to perform node({}) -> block({}) -> node({})", rank, blockId, sendNextWorker[blockId]), false);
+        MyStopWatch watch(true);
+        // MPI_Request req;
+        MPI_Isend(distancesForBlocks[blockId].get(), totalQueryCompareSize, MPI_FLOAT, sendNextWorker[blockId], blockId,
+                 MPI_COMM_WORLD, &sendRequests[blockId]);
+        // MPI_Request_free(&req);
+
+        watch.print(format("node({}) -> block({}) -> node({}) 传输时间", rank, blockId, sendNextWorker[blockId]));
+        //  
+               // return SearchResultInfo(move(distancesForBlocks[blockId]), totalQueryCompareSize, blockId);
         // std::cout << "node" << rank << '|' << blockId << "| send"
         // << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
 

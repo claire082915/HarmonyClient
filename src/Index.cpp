@@ -46,7 +46,8 @@ Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel 
 // void Index::initWorkers(size_t workerCount, float* querys, size_t nq, size_t blockCount, size_t nb) {
 
 // }
-void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool sync, size_t warmUpSearchList, size_t warmUpSearchListSize) {
+
+void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool sync, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param) {
     MyStopWatch watch(true);
     this->workerCount = workerCount;
     this->blockCount = blockCount;
@@ -77,6 +78,7 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool syn
     presumeTotalQueryCompareSize = 10000 * nb;
     distancesForNQuerys = std::make_unique<float[]>(presumeTotalQueryCompareSize);
     distancesResultBuffer = std::make_unique<float[]>(presumeTotalQueryCompareSize);
+    watch.print("malloc blockBuffer1");
 
     blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount);
     for (size_t i = 0; i < blockCount; i++) {
@@ -86,14 +88,29 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool syn
 
     // Search顺序
     workerSearchBlockOrder = vector<vector<idx_t>>(workerCount + 1);
-    size_t gap = (blockCount + workerCount - 1) / workerCount;
     for (size_t i = 1; i <= workerCount; i++) {
         workerSearchBlockOrder[i] = vector<idx_t>(blockCount);
-        for (size_t block = 0; block < blockCount; block++) {
-            size_t order = (block + (gap * (i - 1))) % blockCount;
-            workerSearchBlockOrder[i][order] = block;
+    }
+    if(param.orderOptimize) {
+        size_t gap = (blockCount + workerCount - 1) / workerCount;
+        for (size_t i = 1; i <= workerCount; i++) {
+            for (size_t block = 0; block < blockCount; block++) {
+                size_t order = (block + (gap * (i - 1))) % blockCount;
+                workerSearchBlockOrder[i][order] = block;
+            }
         }
+    } else {
+        for (size_t i = 1; i <= workerCount; i++) {
+            for (size_t order = i - 1; order < i - 1 + blockCount; order++) {
+                workerSearchBlockOrder[i][order % blockCount] = order - (i - 1);
+            }
+        } 
+    }
+    for (size_t i = 1; i <= workerCount; i++) {
         MPI_Send(workerSearchBlockOrder[i].data(), blockCount, MPI_INT64_T, i, 0, MPI_COMM_WORLD);
+    }
+    for (size_t i = 1; i <= workerCount; i++) {
+        printVector(workerSearchBlockOrder[i], BLUE);
     }
 
     //对于每一个块，其搜索的顺序，即一系列rank
@@ -137,7 +154,9 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, bool syn
         MPI_Send(recvPrevWorker[rank].data(), blockCount, MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
     }
     watch.print("ordering");
-
+    MPI_Barrier(MPI_COMM_WORLD);
+    uniWatch = MyStopWatch(false, "masterUniWatch", CRAN);
+    uniWatch.print("master cross barrier");
 }
 
 Index& Index::operator=(Index&& other) noexcept {
@@ -783,20 +802,26 @@ void Index::add(size_t n, const float* codes) {
     }
 }
 std::unique_ptr<idx_t[]> Index::findNearNprobeOfCentroidIds(size_t n, const float* queries) {
-    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe);  // 搜索最近的聚类中心
+    // MyStopWatch watch(true, "FindN watch", RED);
 
     std::unique_ptr<float[]> centroid2queries =
         std::make_unique<float[]>(n * nprobe);  // n个查询向量到nprobe个聚类中心的距离
     std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe);  // 最近的nprobe个聚类中心的id
+    // watch.print(format("malloc"));
     init_result(metric, n * nprobe, centroid2queries.get(),
                 listidqueries.get());  // 优先队列，存储离n个查询向量最近的nprobe个聚类中心
+    // watch.print(format("init result"));
 
     // 下面四个向量都和i绑定，也就是和每一个查询绑定
-    float* centroids2query = centroid2queries.get();  // 单个查询对应的距离
-    idx_t* listids = listidqueries.get();             // 单个查询对应的聚类中心id
+    // float* centroids2query = centroid2queries.get();  // 单个查询对应的距离
+    // idx_t* listids = listidqueries.get();             // 单个查询对应的聚类中心id
 
+#pragma omp parallel for
     for (size_t i = 0; i < n; i++) {
         // 每一个i对应一个查询
+        float* centroids2query = centroid2queries.get() + i * nprobe;  // 单个查询对应的距离
+        idx_t* listids = listidqueries.get() + i * nprobe;             // 单个查询对应的聚类中心id
+        std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe);  // 搜索最近的聚类中心
         scaner_quantizer->set_query(queries + i * d);
         // 获取最近的nprobe个聚类中心
         scaner_quantizer->lite_scan_codes(nlist, centroid_codes.get(),
@@ -805,21 +830,22 @@ std::unique_ptr<idx_t[]> Index::findNearNprobeOfCentroidIds(size_t n, const floa
                                           listids);         // ret , 分别对应堆
         // 要查的聚类id存储在listids的前nprobe个
         sort_result(metric, nprobe, centroids2query, listids);
-        centroids2query += nprobe;
-        listids += nprobe;
+        // centroids2query += nprobe;
+        // listids += nprobe;
     }
+    // watch.print(format("main loop"));
     return listidqueries;
 }
 void Index::warmUpSearch(size_t n, const float* queries, size_t k, float* distances, idx_t* labels,
                          idx_t* listidqueries) {
     // std::cout << BLUE << "simple version of search" << RESET;
     // n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
-    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k);  // 在聚类中心内部搜
+    // std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k);  // 在聚类中心内部搜
 
     // 下面四个向量都和i绑定，也就是和每一个查询绑定
-    float* disi = distances;         // 结果，查询向量最近的k个向量的距离
-    idx_t* idxi = labels;            // 结果，查询向量最近的k个向量的id
-    idx_t* listids = listidqueries;  // 单个查询对应的聚类中心id
+    // float* disi = distances;         // 结果，查询向量最近的k个向量的距离
+    // idx_t* idxi = labels;            // 结果，查询向量最近的k个向量的id
+    // idx_t* listids = listidqueries;  // 单个查询对应的聚类中心id
 
     cout << GREEN << "[warmupSearchList " << warmUpSearchList << ", warmupSearchListSize " << warmUpSearchListSize << "]" << RESET << endl;
     if (warmUpSearchList * warmUpSearchListSize < k) {
@@ -828,9 +854,14 @@ void Index::warmUpSearch(size_t n, const float* queries, size_t k, float* distan
     // assert(warmUpSearchList % nlist == 0);
     // 设置为k
 
+#pragma omp parallel for
     for (size_t i = 0; i < n; i++) {
         // 每一个i对应一个查询
+        std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k);  // 在聚类中心内部搜
         scaner->set_query(queries + i * d);
+        float* disi = distances + i * k;         // 结果，查询向量最近的k个向量的距离
+        idx_t* idxi = labels + i * k;            // 结果，查询向量最近的k个向量的id
+        idx_t* listids = listidqueries + i * nprobe;  // 单个查询对应的聚类中心id
         // 获取最近的nprobe个聚类中心
         // 要查的聚类id存储在listids的前nprobe个
 
@@ -846,7 +877,7 @@ void Index::warmUpSearch(size_t n, const float* queries, size_t k, float* distan
             size_t list_size = list.get_list_size();
 
             if (list_size < warmUpSearchListSize) {
-                cout << YELLOW << std::format("WARNING: warmupSearchListSize set to list_size({})", list_size) << RESET << endl;
+                // cout << YELLOW << std::format("WARNING: warmupSearchListSize set to list_size({})", list_size) << RESET << endl;
                 // totalCompare += list_size;
                 scaner->lite_scan_codes(list_size, list.get_candidate_codes(), list.get_candidate_id(), disi, idxi);
             } else {
@@ -858,9 +889,9 @@ void Index::warmUpSearch(size_t n, const float* queries, size_t k, float* distan
         }
         // cout << std::format("warm{} {}", i, totalCompare) << endl;
         // sort_result(metric, k, disi, idxi);
-        disi += k;
-        idxi += k;
-        listids += nprobe;
+        // disi += k;
+        // idxi += k;
+        // listids += nprobe;
     }
 }
 void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
@@ -935,6 +966,7 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
 
     //重置由于warmup导致的heap已经有了一些值
     init_result(METRIC_L2, n * k, distances, labels);
+    watch.print("init result");
 
     bool first = false;
     MyStopWatch loadWatch; //负载均衡
@@ -944,8 +976,14 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
         size_t q = blockId * blockSize;
         size_t queryOffset = queryCompareSizePreSum[q];
         // cout << format("master waiting for block({}) from node({})", blockId, senderRank) << endl;
+        uniWatch.print(format("master waiting block {}", blockId), false);
+        // MyStopWatch wt(true, "recv watch", RED);
         MPI_Recv(distancesForNQuerys.get() + queryOffset, queryCompareSizeForBlocks[blockId],
                      MPI_FLOAT, senderRank, blockId, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        // wt.print(format("receive block {}", blockId));
+        // auto clock1 = std::chrono::high_resolution_clock::now();
+        // std::cout << format("receive block {} on {:.2f}s", blockId, std::chrono::duration<double>(clock1 - clock).count()) << std::endl;
+        uniWatch.print(format("master receive block {}", blockId), false);
         // cout << format("master received block({}) from node({})", blockId, senderRank) << endl;
         if(first == false) {
             first = true;
@@ -1218,6 +1256,7 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     // 把n个查询交给多线程
 #pragma omp parallel for num_threads(nt)
     for (size_t i = 0; i < nt; i++) {
+        // cout << " orint = " << omp_get_num_threads() << endl;
         size_t start, end;
         if (i < extra) {
             start = i * (batch_size + 1);

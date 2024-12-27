@@ -110,6 +110,9 @@ int main(int argc, char* argv[]) {
     program.add_argument("--cut")
         .default_value(false)
         .implicit_value(true);
+    program.add_argument("--disableOrderOpt")
+        .default_value(false)
+        .implicit_value(true);
 
     try {
         program.parse_args(argc, argv);
@@ -128,9 +131,15 @@ int main(int argc, char* argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &workerCount);  
     workerCount--;
+
+    size_t nt = omp_get_max_threads();
+    cout << "node " << rank << " nt = " << nt << endl;
+
     if (rank != 0) {
         bool cut = program.get<bool>("cut");
         workerMain(rank, cut);
+        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Finalize();
     } else {
         // MPI_Comm master_comm;
         // MPI_Comm_split(MPI_COMM_WORLD, 2, rank, &master_comm);
@@ -164,6 +173,8 @@ int main(int argc, char* argv[]) {
         // size_t nodeCount = program.get<size_t>("node");
         size_t blockCount = program.get<size_t>("block");
         bool sync = program.get<bool>("sync");
+        Index::Param param;
+        param.orderOptimize = !program.get<bool>("disableOrderOpt");
 
         
 
@@ -501,7 +512,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time,
-                            bool blockVersion, float* distances, idx_t* labels) {
+                            bool blockVersion, float* distances, idx_t* labels) -> Stats {
             // std::string simple = blockVersion ? "simple" : "original";
             // std::string output_path =
             // std::format("{}/{}/result/result_nlist_{}_nprobe_{}_opt_{}_k_{}_ratio_{}_{}.{}",
@@ -512,7 +523,7 @@ int main(int argc, char* argv[]) {
 
             if (blockVersion) {
                 // index.initWorkers(workerCount, query.get(), nq, blockCount, nb);
-                index.preSearch(nb, workerCount, blockCount, sync, warmUpSearchList, warmUpSearchListSize);
+                index.preSearch(nb, workerCount, blockCount, sync, warmUpSearchList, warmUpSearchListSize, param);
             }
             if (loop > 1) {
                 index.search(nq, query.get(), k, distances, labels, ratio, blockVersion);
@@ -523,11 +534,12 @@ int main(int argc, char* argv[]) {
                 stats = index.search(nq, query.get(), k, distances, labels, ratio, blockVersion);
             }
             
+            double search_time = stopwatch.elapsedSeconds() / loop;
+
             float recall = calculate_recall(labels, distances, ground_truth_I.get(), ground_truth_D.get(),
                                             nq, k, metric);
             float r2 =
                 calculate_r2(labels, distances, ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
-            double search_time = stopwatch.elapsedSeconds() / loop;
             stats.simi_ratio = ratio;
             stats.nlist = nlist;
             stats.nprobe = nprobe;
@@ -544,6 +556,7 @@ int main(int argc, char* argv[]) {
             if (recall == 1) {
                 early_stop_flag = true;
             }
+            return stats;
         };
         // search with different nprobe ,Opt level ,ratio
         for (size_t i = 0; i < nprobes.size(); i++) {
@@ -556,14 +569,19 @@ int main(int argc, char* argv[]) {
                 for (float ratio : ratios) {
                     std::unique_ptr<float[]> distancesB = std::make_unique<float[]>(nq * k);
                     std::unique_ptr<idx_t[]> labelsB = std::make_unique<idx_t[]>(nq * k);
-                    if (block_version) {
-                        doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true, distancesB.get(), labelsB.get());
-                    }
-                    // else {
-                    std::cout << YELLOW;
                     std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
                     std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
-                    doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false, distances.get(), labels.get());
+                    // else {
+                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false, distances.get(), labels.get());
+
+                    std::cout << YELLOW;
+                    if (block_version) {
+                        Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true, distancesB.get(), labelsB.get());
+                        double speed_up_ratio = 100.0 * oriStat.query_time / stat.query_time;
+                        cout << MAG << format("Speed up ratio compared to original version : {:.2f}", speed_up_ratio) << RESET << endl;
+                        MPI_Barrier(MPI_COMM_WORLD);
+                    }
+                    MPI_Finalize();
                     // for(int i = 0; i < nq; i++) {
                     //     std::cout << "Q" << i << " " << std::endl;
                     //     printVector(distances.get() + i * k, k, BLUE);
@@ -580,7 +598,6 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-    MPI_Finalize();
     cout << CRAN << "return node:" << rank << RESET << endl;
     return 0;
 }

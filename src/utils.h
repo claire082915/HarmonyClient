@@ -27,6 +27,7 @@ namespace tribase {
     const std::string YELLOW = "\033[1;33m"; // Blue text
     const std::string GREEN = "\033[1;32m"; // Blue text
     const std::string CRAN = "\033[1;36m"; // Blue text
+    const std::string MAG = "\033[1;35m"; // Blue text
     const std::string RED = "\033[1;31m"; // Blue text
     const std::string RESET = "\033[0m"; // Reset color
 
@@ -349,18 +350,21 @@ class MyStopWatch {
 public:
     Stopwatch watch;
     bool shouldPrint;
-    MyStopWatch(bool shouldPrint = true) : shouldPrint(shouldPrint) { watch.reset(); }
+    std::string name;
+    std::string color;
+    MyStopWatch(bool shouldPrint = true, std::string name = "MyStopWatch", std::string color = GREEN) 
+    : shouldPrint(shouldPrint) , name(name) ,color(color) { watch.reset(); }
 
-    void print(std::string s) {
+    void print(std::string s, bool reset = true) {
         if (!shouldPrint) {
             return;
         }
-        double time = watch.elapsedSeconds(true);
+        double time = watch.elapsedSeconds(reset);
         std::string star = "";
         if(time > 1) {
             star = "***";
         }
-        std::cout << GREEN << format("[StopWatch:{:>30}]:{:.2f}s  {}" ,s, time, star) << RESET << std::endl;
+        std::cout << color << format("[{}:{:>30}]:{:.2f}s  {}" ,name ,s, time, star) << RESET << std::endl;
     }
     void reset() {
         watch.reset();

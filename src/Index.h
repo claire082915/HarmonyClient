@@ -42,7 +42,10 @@ class Index {
     void load_SPANN(std::string path);
     // void initWorkers(size_t workerCount, float* querys, size_t querySize, size_t blockCount, size_t nb);
     void printIndex();
-    void preSearch(size_t nb, size_t workerCount, size_t blockCount, bool sync, size_t warmUpSearchList, size_t warmUpSearchListSize);
+    struct Param {
+        bool orderOptimize = true;
+    };
+    void preSearch(size_t nb, size_t workerCount, size_t blockCount, bool sync, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param);
     // 其他查询方法的声明
 
    private:
@@ -66,6 +69,7 @@ class Index {
 
     bool verbose;
     EdgeDevice edge_device_enabled;
+    MyStopWatch uniWatch;
 
     std::unique_ptr<IVF[]> lists; //代表所有聚类，id为index,IVF是一个聚类
     std::unique_ptr<float[]> centroid_codes; //聚类中心向量表示
@@ -80,6 +84,7 @@ class Index {
     size_t warmUpSearchList = 0;
     size_t warmUpSearchListSize = 0;
 
+    
 };
 
 }  // namespace tribase
