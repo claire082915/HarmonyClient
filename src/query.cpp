@@ -587,15 +587,15 @@ int main(int argc, char* argv[]) {
                         double speed_up_ratio = 100.0 * oriStat.query_time / stat.query_time;
                         cout << MAG << format("Speed up ratio compared to original version : {:.2f}", speed_up_ratio) << RESET << endl;
                     } 
-                    for(int i = 0; i < nq; i++) {
-                        if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
-                            std::cout << "Q" << i << " " << std::endl;
-                            printVector(distances.get() + i * k, k, BLUE);
-                            printVector(distancesB.get() + i * k, k, BLUE);
-                            printVector(labels.get() + i * k, k, BLUE);
-                            printVector(labelsB.get() + i * k, k, BLUE);
-                        }
-                    }
+                    // for(int i = 0; i < nq; i++) {
+                    //     if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                    //         std::cout << "Q" << i << " " << std::endl;
+                    //         printVector(distances.get() + i * k, k, BLUE);
+                    //         printVector(distancesB.get() + i * k, k, BLUE);
+                    //         printVector(labels.get() + i * k, k, BLUE);
+                    //         printVector(labelsB.get() + i * k, k, BLUE);
+                    //     }
+                    // }
                     std::cout << RESET;
                     // }
                 }

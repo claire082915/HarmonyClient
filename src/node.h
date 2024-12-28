@@ -526,24 +526,42 @@ public:
     void search() {
         uniWatch.print(format("node {} start search", rank), false);
         
+        auto scaners = vector<unique_ptr<IVFScanBase>>(omp_get_max_threads());
+        for(int i = 0; i < scaners.size(); i++) {
+            scaners[i] = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k));  // 在聚类中心内部搜
+        }
+        uniWatch.print(format("node {} malloc ", rank), false);
 #pragma omp parallel for 
         for(size_t q = 0; q < nq; q++) {
-            std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k));  // 在聚类中心内部搜
-            scaner->set_query(querys.get() + q * info.d);
+            // auto scaner = scaners[omp_get_thread_num()].get();
+            // scaner->set_query(querys.get() + q * info.d);
             for (size_t i = 0; i < info.nprobe; i++) {
                 idx_t ivfId = listidqueries[q * info.nprobe + i];
-                if(!isResponsible(ivfId)) {
+                if(!(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount)) {
                     continue;
                 }
-                size_t listSize = getListSize(ivfId);
-                float* codes = getCodes(ivfId);
-                size_t* ids = getIds(ivfId);
-                scaner->lite_scan_codes(listSize, codes, ids, distances.get() + q * k, labels.get() + q * k);
+                idx_t index = ivfId - info.startIVFId;
+                size_t listSize = listSizes[index];
+                float* codes = listCodes[index].get();
+                size_t* ids = listIds[index].get();
+                float* simi = distances.get() + q * k;
+                idx_t* idxi = labels.get() + q * k;
+                // scaner->lite_scan_codes(listSize, codes, ids, distances.get() + q * k, labels.get() + q * k);
+                for (size_t j = 0; j < listSize; j++) {
+                    //和每一个待比较向量进行比较，每一个i和一个待比较向量绑定
+                    const float* candicate = codes + j * info.d;
+                    float dis = calculatedEuclideanDistance(querys.get() + q * info.d, candicate, info.d);
+                    if (dis < simi[0]) {
+                        //比堆顶
+                        heap_replace_top<METRIC_L2>(k, simi, idxi, dis, ids[j]);
+                    }
+                }
             }
         }
+        uniWatch.print(format("node {} search", rank), false);
         MPI_Send(distances.get(), k * nq, MPI_FLOAT, 0, 0, MPI_COMM_WORLD); 
         MPI_Send(labels.get(), k * nq, MPI_INT64_T, 0, 0, MPI_COMM_WORLD); 
-        uniWatch.print(format("node {} start search", rank), false);
+        uniWatch.print(format("node {} send", rank), false);
     }
     
 };
