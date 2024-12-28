@@ -42,6 +42,7 @@ public:
             cout << ",block_dim:" << block_dim;
             cout << ",nb:" << nb;
             cout << "]";
+            cout << RESET;
             cout << endl;
         }
     };
@@ -417,6 +418,7 @@ public:
             cout << ",startIVFId:" << startIVFId;
             cout << ",ivfCount:" << ivfCount;
             cout << "]";
+            cout << RESET;
             cout << endl;
         }
     };

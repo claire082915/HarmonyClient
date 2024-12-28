@@ -146,6 +146,7 @@ int main(int argc, char* argv[]) {
     bool divideIVF = program.get<bool>("divideIVF");
     if (rank != 0) {
         bool cut = program.get<bool>("cut");
+        MPI_Barrier(MPI_COMM_WORLD);
         workerMain(rank, cut, divideIVF);
     } else {
         // MPI_Comm master_comm;
@@ -520,7 +521,9 @@ int main(int argc, char* argv[]) {
 
         auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, float* distances, idx_t* labels, Index::Param param) -> Stats {
            
-            index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param);
+            if(param.mode != Index::SearchMode::ORIGINAL) {
+                index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param);
+            }
             if (loop > 1) {
                 index.search(nq, query.get(), k, distances, labels, ratio, &param);
             }
@@ -569,6 +572,7 @@ int main(int argc, char* argv[]) {
                     Index::Param oriParam;
                     oriParam.mode = Index::SearchMode::ORIGINAL;
                     Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
+                    MPI_Barrier(MPI_COMM_WORLD);
 
                     std::cout << YELLOW;
 
