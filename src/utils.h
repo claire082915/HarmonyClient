@@ -1,4 +1,4 @@
-#pragma once
+t pu#pragma once
 
 #include <mkl.h>
 // #include <mkl_cblas.h>
@@ -156,7 +156,16 @@ size_t nt = omp_get_max_threads();
         dest[i] = src1[i] + src2[i];
     }
 }
-
+template <typename T>
+inline bool diffVector(const T* const v1, const T* const v2, size_t d) {
+    using namespace std;
+    for(size_t i = 0; i < d; i++) {
+        if(v1[i] != v2[i]) {
+            return true;
+        }
+    }
+    return false;
+}
 template <typename T>
 inline void printVector(std::vector<T>& v, std::string color) {
     using namespace std;

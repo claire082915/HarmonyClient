@@ -25,14 +25,19 @@ bool str_lower_equal(const std::string& a, const std::string& b) {
 
 
 
-int workerMain(int rank, bool cut) {
+int workerMain(int rank, bool cut, bool divideIVF) {
     // cout << "node(" << rank << ") main()" << endl;
     // MPI_Bcast(data.data(), array_size, MPI_INT, 0, MPI_COMM_WORLD);
     
-    
-    Worker node;
-    node.init(rank);
-    node.search(cut);
+    if(divideIVF) {
+        BaseWorker worker; 
+        worker.init(rank);
+        worker.search();
+    } else {
+        Worker node;
+        node.init(rank);
+        node.search(cut);
+    }
     // for(size_t i = 0; i < node.info.blockCount; i++) {
     //     node.searchBlock(i);
     // }
@@ -113,6 +118,9 @@ int main(int argc, char* argv[]) {
     program.add_argument("--disableOrderOpt")
         .default_value(false)
         .implicit_value(true);
+    program.add_argument("--divideIVF")
+        .default_value(false)
+        .implicit_value(true);
 
     try {
         program.parse_args(argc, argv);
@@ -132,14 +140,13 @@ int main(int argc, char* argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &workerCount);  
     workerCount--;
 
-    size_t nt = omp_get_max_threads();
-    cout << "node " << rank << " nt = " << nt << endl;
+    // size_t nt = omp_get_max_threads();
+    // cout << "node " << rank << " nt = " << nt << endl;
 
+    bool divideIVF = program.get<bool>("divideIVF");
     if (rank != 0) {
         bool cut = program.get<bool>("cut");
-        workerMain(rank, cut);
-        MPI_Barrier(MPI_COMM_WORLD);
-        MPI_Finalize();
+        workerMain(rank, cut, divideIVF);
     } else {
         // MPI_Comm master_comm;
         // MPI_Comm_split(MPI_COMM_WORLD, 2, rank, &master_comm);
@@ -173,13 +180,10 @@ int main(int argc, char* argv[]) {
         // size_t nodeCount = program.get<size_t>("node");
         size_t blockCount = program.get<size_t>("block");
         bool sync = program.get<bool>("sync");
-        Index::Param param;
-        param.orderOptimize = !program.get<bool>("disableOrderOpt");
-
         
 
-        bool block_version = blockCount > 0;
-        if (blockCount != 0 && workerCount == 0 || blockCount == 0 && workerCount != 0) {
+        bool block_version = (blockCount > 0) && (divideIVF == false);
+        if (block_version && (blockCount != 0 && workerCount == 0 || blockCount == 0 && workerCount != 0)) {
             throw std::invalid_argument("block count and node cound must be provided at the same time");
         }
         std::cout << BLUE << "number of nodes : " << workerCount << RESET << std::endl;
@@ -511,27 +515,19 @@ int main(int argc, char* argv[]) {
         if (train_only) {
             return 0;
         }
-        auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time,
-                            bool blockVersion, float* distances, idx_t* labels) -> Stats {
-            // std::string simple = blockVersion ? "simple" : "original";
-            // std::string output_path =
-            // std::format("{}/{}/result/result_nlist_{}_nprobe_{}_opt_{}_k_{}_ratio_{}_{}.{}",
-            //                                               benchmarks_path, dataset, nlist, nprobe,
-            //                                               static_cast<int>(opt_level), k, ratio, output_format,
-            //                                               simple);
-            // result stored in distance , labels
 
-            if (blockVersion) {
-                // index.initWorkers(workerCount, query.get(), nq, blockCount, nb);
-                index.preSearch(nb, workerCount, blockCount, sync, warmUpSearchList, warmUpSearchListSize, param);
-            }
+        
+
+        auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, float* distances, idx_t* labels, Index::Param param) -> Stats {
+           
+            index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param);
             if (loop > 1) {
-                index.search(nq, query.get(), k, distances, labels, ratio, blockVersion);
+                index.search(nq, query.get(), k, distances, labels, ratio, &param);
             }
             Stopwatch stopwatch;
             Stats stats;
             for (size_t j = 0; j < loop; j++) {
-                stats = index.search(nq, query.get(), k, distances, labels, ratio, blockVersion);
+                stats = index.search(nq, query.get(), k, distances, labels, ratio, &param);
             }
             
             double search_time = stopwatch.elapsedSeconds() / loop;
@@ -549,13 +545,11 @@ int main(int argc, char* argv[]) {
             stats.recall = recall;
             stats.r2 = r2;
             stats.print();
-            if (blockVersion)
-                stats.toCsv(log_path_simple, true, dataset);
-            else
-                stats.toCsv(log_path, true, dataset);
+            stats.toCsv(log_path, true, dataset);
             if (recall == 1) {
                 early_stop_flag = true;
             }
+            cout << MAG << format("haha") << RESET << endl;
             return stats;
         };
         // search with different nprobe ,Opt level ,ratio
@@ -572,23 +566,36 @@ int main(int argc, char* argv[]) {
                     std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
                     std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
                     // else {
-                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, false, distances.get(), labels.get());
+                    Index::Param oriParam;
+                    oriParam.mode = Index::SearchMode::ORIGINAL;
+                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
 
                     std::cout << YELLOW;
-                    if (block_version) {
-                        Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, true, distancesB.get(), labelsB.get());
+
+                    Index::Param param;
+                    param.orderOptimize = !program.get<bool>("disableOrderOpt");
+                    if(divideIVF) {
+                        param.mode = Index::SearchMode::DIVIDE_IVF;
+                    } else if (block_version) {
+                        param.mode = Index::SearchMode::DIVIDE_DIM;
+                    } else {
+                        param.mode = Index::SearchMode::ORIGINAL;
+                    }
+
+                    if (param.mode != Index::SearchMode::ORIGINAL) {
+                        Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
                         double speed_up_ratio = 100.0 * oriStat.query_time / stat.query_time;
                         cout << MAG << format("Speed up ratio compared to original version : {:.2f}", speed_up_ratio) << RESET << endl;
-                        MPI_Barrier(MPI_COMM_WORLD);
+                    } 
+                    for(int i = 0; i < nq; i++) {
+                        if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                            std::cout << "Q" << i << " " << std::endl;
+                            printVector(distances.get() + i * k, k, BLUE);
+                            printVector(distancesB.get() + i * k, k, BLUE);
+                            printVector(labels.get() + i * k, k, BLUE);
+                            printVector(labelsB.get() + i * k, k, BLUE);
+                        }
                     }
-                    MPI_Finalize();
-                    // for(int i = 0; i < nq; i++) {
-                    //     std::cout << "Q" << i << " " << std::endl;
-                    //     printVector(distances.get() + i * k, k, BLUE);
-                    //     printVector(distancesB.get() + i * k, k, BLUE);
-                    //     printVector(labels.get() + i * k, k, BLUE);
-                    //     printVector(labelsB.get() + i * k, k, BLUE);
-                    // }
                     std::cout << RESET;
                     // }
                 }
@@ -598,6 +605,8 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+    cout << CRAN << "finalizing node:" << rank << RESET << endl;
+    MPI_Finalize();
     cout << CRAN << "return node:" << rank << RESET << endl;
     return 0;
 }

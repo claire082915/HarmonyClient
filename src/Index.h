@@ -27,25 +27,33 @@ class Index {
           );
 
     Index& operator=(Index&& other) noexcept;
-
+    
+    enum class SearchMode {
+        ORIGINAL,
+        DIVIDE_IVF,
+        DIVIDE_DIM,
+    };
+    struct Param {
+        bool orderOptimize = true;
+        SearchMode mode;
+    };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
     void single_thread_nearest_cluster_search(size_t n, const float* queries, float* distances, idx_t* labels);
     void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
 //     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
     void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
+    void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void add(size_t n, const float* codes);
     void add_simple(size_t n, const float* codes);
-    Stats search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio = 1.0, bool simpleVersion = false);
+    Stats search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio = 1, Param *param = nullptr);
     void save_index(std::string path) const;
     void load_index(std::string path);
     void load_SPANN(std::string path);
     // void initWorkers(size_t workerCount, float* querys, size_t querySize, size_t blockCount, size_t nb);
     void printIndex();
-    struct Param {
-        bool orderOptimize = true;
-    };
-    void preSearch(size_t nb, size_t workerCount, size_t blockCount, bool sync, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param);
+   
+    void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param);
     // 其他查询方法的声明
 
    private:
@@ -83,6 +91,10 @@ class Index {
     std::vector<vector<idx_t>> blockSearchedOrder; 
     size_t warmUpSearchList = 0;
     size_t warmUpSearchListSize = 0;
+
+    size_t presumeNq = 10000, presumeK = 1000;
+    std::vector<std::unique_ptr<float[]>> distancesHeapBuffer;
+    std::vector<std::unique_ptr<idx_t[]>> labelsHeapBuffer;
 
     
 };

@@ -10,7 +10,8 @@
 #include "IVF.h"
 #include "cassert"
 #include "utils.h"
-
+#include "heap.hpp"
+#include "IVFScan.hpp"
 namespace tribase {
 
 using namespace std;
@@ -21,19 +22,17 @@ public:
         size_t d, block_dim, workerCount;
         size_t nlist;
         size_t blockCount, nprobe, nb;
-        bool sync;
         InitInfo(size_t d, size_t block_dim, size_t workerCount, size_t nlist, size_t blockCount, size_t nprobe,
-                 size_t nb, bool sync)
+                 size_t nb)
             : d(d),
               block_dim(block_dim),
               workerCount(workerCount),
               nlist(nlist),
               blockCount(blockCount),
               nprobe(nprobe),
-              nb(nb),
-              sync(sync)
+              nb(nb)
               {}
-        InitInfo() : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0), sync(true) {}
+        InitInfo() : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0)  {}
         void print() {
             cout << GREEN << "InitInfo:[";
             cout << "d:" << d;
@@ -388,5 +387,165 @@ public:
     }
 };
 
+class BaseWorker {
+private:
+public:
+    struct InitInfo {
+        size_t d, workerCount;
+        size_t nlist;
+        size_t nprobe, nb;
+        size_t startIVFId, ivfCount;
+        InitInfo(size_t d, size_t workerCount, size_t nlist, size_t nprobe,
+                 size_t nb, size_t beginIVF, size_t ivfCount)
+            : d(d),
+              workerCount(workerCount),
+              nlist(nlist),
+              nprobe(nprobe),
+              nb(nb),
+              startIVFId(beginIVF),
+              ivfCount(ivfCount)
+              {}
+        InitInfo() : d(0), workerCount(0), nlist(0), nprobe(0), nb(0), startIVFId(0),
+              ivfCount(0) {}
+        void print() {
+            cout << GREEN << "InitInfo:[";
+            cout << "d:" << d;
+            cout << ",nlist:" << nlist;
+            cout << ",nprobe:" << nprobe;
+            cout << ",worker:" << workerCount;
+            cout << ",nb:" << nb;
+            cout << ",startIVFId:" << startIVFId;
+            cout << ",ivfCount:" << ivfCount;
+            cout << "]";
+            cout << endl;
+        }
+    };
+    // 代表一次搜索请求中需要包含的信息
+
+    size_t rank = 0;
+    size_t nq = 0;
+    size_t k = 0;
+    std::unique_ptr<size_t[]> listSizes;         // nlist个聚类的向量数
+    vector<std::unique_ptr<float[]>> listCodes;  // nlist个聚类的向量数
+    vector<std::unique_ptr<size_t[]>> listIds;  // nlist个聚类的向量数
+    std::unique_ptr<float[]> querys;             // nq个查询向量, 维度是block_dim
+    std::unique_ptr<idx_t[]> listidqueries;      // nq * nprobe 查询向量相近的聚类id
+    // std::unique_ptr<size_t[]> queryCompareSize;  
+    // std::unique_ptr<size_t[]> queryCompareSizePreSum;
+    std::unique_ptr<float[]> distances;
+    std::unique_ptr<idx_t[]> labels;
+
+    InitInfo info;
+
+    MyStopWatch uniWatch;
+
+    void init(int rank) {
+        MyStopWatch watch(true);
+
+        this->rank = rank;
+
+        // 1.InitInfo
+        MPI_Recv(&info, sizeof(InitInfo), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        info.print();
+        // IVF的ID通过startIVFid给出, 顺序排列
+
+        // 2.IVF的大小，IVF的向量表示
+        listSizes = std::make_unique<size_t[]>(info.ivfCount);
+        MPI_Recv(listSizes.get(), info.ivfCount * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        listCodes = vector<std::unique_ptr<float[]>>(info.ivfCount); //每个聚类对应的codes
+        listIds = vector<std::unique_ptr<size_t[]>>(info.ivfCount); //每个聚类对应的ids
+        for (size_t i = 0; i < info.ivfCount; i++) {
+            listCodes[i] = std::make_unique<float[]>(listSizes[i] * info.d);
+            listIds[i] = std::make_unique<size_t[]>(listSizes[i] * info.d);
+            MPI_Recv(listCodes[i].get(), listSizes[i] * info.d , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(listIds[i].get(), listSizes[i] * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+        watch.print("listCodes and listIds");
+
+        //提前malloc
+        int presumeNq = 10000;
+        int presumeK = 1000;
+        this->querys = std::make_unique<float[]>(presumeNq * info.d);
+        listidqueries = std::make_unique<idx_t[]>(presumeNq * info.nprobe);  // 最近的nprobe个聚类中心的id
+        // queryCompareSize = std::make_unique<size_t[]>(presumeNq);
+        // queryCompareSizePreSum = std::make_unique<size_t[]>(presumeNq + 1);
+
+        distances = std::make_unique<float[]>(presumeNq * presumeK);
+        labels = std::make_unique<idx_t[]>(presumeNq * presumeK);
+        init_result(METRIC_L2, presumeNq * presumeK, distances.get(), labels.get());
+
+        MPI_Barrier(MPI_COMM_WORLD); //对应preSearch最后的barrier
+
+        uniWatch = MyStopWatch(true, "uniWatch", MAG);
+        uniWatch.print(format("node {} cross barrier", rank), false);
+
+        // nq, k, querys
+        MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&k, sizeof(k), MPI_BYTE, 0, MPI_COMM_WORLD);
+        if(nq * k > presumeK * presumeNq) {
+            cerr << "presumeNq is too small" << endl;
+            exit(1);
+        }
+        uniWatch.print(format("node {} nq", rank), false);
+        MPI_Bcast(querys.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        uniWatch.print(format("node {} querys", rank), false);
+
+        // query最近的nprobe个聚类中心的id
+        MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
+        uniWatch.print(format("node {} listidqueries", rank), false);
+
+        // queryCompareSize,queryCompareSizePreSum
+        // queryCompareSize = std::make_unique<size_t[]>(nq);
+        // MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // uniWatch.print(format("node {} queryCompareSize", rank), false);
+
+        // 最大堆
+
+        watch.print(format("Node {} Init", rank));
+        uniWatch.print(format("node {} finish init", rank), false);
+
+    }
+    float* getCodes(idx_t ivfId) {
+        idx_t index = ivfId - info.startIVFId;
+        return listCodes[index].get();
+    }
+    size_t* getIds(idx_t ivfId) {
+        idx_t index = ivfId - info.startIVFId;
+        return listIds[index].get();
+    }
+    size_t getListSize(idx_t ivfId) {
+        idx_t index = ivfId - info.startIVFId;
+        return listSizes[index];
+    }
+    bool isResponsible(idx_t ivfId) {
+        return ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount;
+    }
+
+    void search() {
+        uniWatch.print(format("node {} start search", rank), false);
+        
+#pragma omp parallel for 
+        for(size_t q = 0; q < nq; q++) {
+            std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k));  // 在聚类中心内部搜
+            scaner->set_query(querys.get() + q * info.d);
+            for (size_t i = 0; i < info.nprobe; i++) {
+                idx_t ivfId = listidqueries[q * info.nprobe + i];
+                if(!isResponsible(ivfId)) {
+                    continue;
+                }
+                size_t listSize = getListSize(ivfId);
+                float* codes = getCodes(ivfId);
+                size_t* ids = getIds(ivfId);
+                scaner->lite_scan_codes(listSize, codes, ids, distances.get() + q * k, labels.get() + q * k);
+            }
+        }
+        MPI_Send(distances.get(), k * nq, MPI_FLOAT, 0, 0, MPI_COMM_WORLD); 
+        MPI_Send(labels.get(), k * nq, MPI_INT64_T, 0, 0, MPI_COMM_WORLD); 
+        uniWatch.print(format("node {} start search", rank), false);
+    }
+    
+};
 }  // namespace tribase
 #endif
