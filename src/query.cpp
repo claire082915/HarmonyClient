@@ -100,10 +100,10 @@ int main(int argc, char* argv[]) {
         .help("number of blocks")
         .default_value(0ul)
         .action([](const std::string& value) -> size_t { return std::stoul(value); });
-    program.add_argument("--sync")
-        .help("sync after block search")
-        .default_value(false)
-        .implicit_value(true);
+    // program.add_argument("--sync")
+    //     .help("sync after block search")
+    //     .default_value(false)
+    //     .implicit_value(true);
     program.add_argument("--warmup_list_size")
         .help("warmup nlist size")
         .default_value(0ul)
@@ -140,20 +140,16 @@ int main(int argc, char* argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &workerCount);  
     workerCount--;
 
-    // size_t nt = omp_get_max_threads();
-    // cout << "node " << rank << " nt = " << nt << endl;
-
     bool divideIVF = program.get<bool>("divideIVF");
+    bool disableOrderOptimize = program.get<bool>("disableOrderOpt");
+    bool cut = program.get<bool>("cut");
+
     if (rank != 0) {
-        bool cut = program.get<bool>("cut");
         MPI_Barrier(MPI_COMM_WORLD);
         workerMain(rank, cut, divideIVF);
     } else {
-        // MPI_Comm master_comm;
-        // MPI_Comm_split(MPI_COMM_WORLD, 2, rank, &master_comm);
         cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
         
-
         std::vector<size_t> nprobes = program.get<std::vector<size_t>>("nprobes");
         std::vector<std::string> opt_levels_str = program.get<std::vector<std::string>>("opt_levels");
         std::vector<float> ratios = program.get<std::vector<float>>("ratios");
@@ -180,10 +176,10 @@ int main(int argc, char* argv[]) {
         // bool block_version = program.get<bool>("block");
         // size_t nodeCount = program.get<size_t>("node");
         size_t blockCount = program.get<size_t>("block");
-        bool sync = program.get<bool>("sync");
+        // bool sync = program.get<bool>("sync");
         
 
-        bool block_version = (blockCount > 0) && (divideIVF == false);
+        bool block_version = (blockCount > 0);
         if (block_version && (blockCount != 0 && workerCount == 0 || blockCount == 0 && workerCount != 0)) {
             throw std::invalid_argument("block count and node cound must be provided at the same time");
         }
@@ -324,11 +320,11 @@ int main(int argc, char* argv[]) {
         auto [query, nq, _] = loadXvecs(query_path);
 
 
-        cout << YELLOW << std::format("[dim:{}, nb:{}, nq:{}, k:{}]", d, nb, nq, k) << RESET << endl; 
+        cout << YELLOW << std::format("[dim:{}, nb:{}, nq:{}, k:{}, worker:{}]", d, nb, nq, k, workerCount) << RESET << endl; 
 
         if (block_version) {
             if (d % workerCount != 0) {
-                cerr << RED << "Error: d % node must be 0" << RESET << endl;
+                cerr << RED << "Error: d % worker must be 0" << RESET << endl;
                 return 1;
             }
             if (nq % blockCount != 0) {
@@ -338,6 +334,10 @@ int main(int argc, char* argv[]) {
             double blockResultSize = (double)nq / blockCount * nb;
             if(blockResultSize > INT_MAX) {
                 cerr << RED << "blockResultSize" << blockResultSize << ", too few blocks" << RESET <<endl;
+                return 1;
+            }
+            if(divideIVF) {
+                cerr << RED << "divideIVF and block cannot be provided together" << RESET <<endl;
                 return 1;
             }
         }
@@ -521,9 +521,7 @@ int main(int argc, char* argv[]) {
 
         auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, float* distances, idx_t* labels, Index::Param param) -> Stats {
            
-            if(param.mode != Index::SearchMode::ORIGINAL) {
-                index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param);
-            }
+            index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param);
             if (loop > 1) {
                 index.search(nq, query.get(), k, distances, labels, ratio, &param);
             }
@@ -547,12 +545,15 @@ int main(int argc, char* argv[]) {
             stats.opt_level = opt_level;
             stats.recall = recall;
             stats.r2 = r2;
-            stats.print();
-            stats.toCsv(log_path, true, dataset);
+            stats.block = blockCount;
+            stats.worker = workerCount;
+            stats.disableOrderOptimize = disableOrderOptimize;
+            stats.divideIVF = divideIVF;
+            stats.cut = cut;
+            
             if (recall == 1) {
                 early_stop_flag = true;
             }
-            cout << MAG << format("haha") << RESET << endl;
             return stats;
         };
         // search with different nprobe ,Opt level ,ratio
@@ -577,7 +578,7 @@ int main(int argc, char* argv[]) {
                     std::cout << YELLOW;
 
                     Index::Param param;
-                    param.orderOptimize = !program.get<bool>("disableOrderOpt");
+                    param.orderOptimize = !disableOrderOptimize;
                     if(divideIVF) {
                         param.mode = Index::SearchMode::DIVIDE_IVF;
                     } else if (block_version) {
@@ -588,8 +589,10 @@ int main(int argc, char* argv[]) {
 
                     if (param.mode != Index::SearchMode::ORIGINAL) {
                         Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
-                        double speed_up_ratio = 100.0 * oriStat.query_time / stat.query_time;
-                        cout << MAG << format("Speed up ratio compared to original version : {:.2f}", speed_up_ratio) << RESET << endl;
+                        stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
+                        cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
+                        stat.print();
+                        stat.myToCsv(log_path, true, dataset);
                     } 
                     // for(int i = 0; i < nq; i++) {
                     //     if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
@@ -609,8 +612,7 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-    cout << CRAN << "finalizing node:" << rank << RESET << endl;
     MPI_Finalize();
-    cout << CRAN << "return node:" << rank << RESET << endl;
+    cout << CRAN << "return worker:" << rank << RESET << endl;
     return 0;
 }

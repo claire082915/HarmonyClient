@@ -33,6 +33,10 @@ class Stats {
     size_t nlist;
     size_t nprobe;
 
+    bool divideIVF, disableOrderOptimize, cut;
+    size_t block, worker;
+    double blockVersionSpeedUpWithOriginal;
+
     double faiss_query_time;
     double query_time;
 
@@ -108,6 +112,17 @@ class Stats {
                << skip_triangle_count << skip_triangle_large_count << skip_subnn_L2_count << skip_subnn_IP_count << simi_update_rate / 100
                << check_subnn_L2 << check_subnn_IP
                << time_speedup / 100 << pruning_speedup / 100 << query_time
+               << recall << r2 << std::endl;
+    }
+    void myToCsv(std::string filename, bool append, std::string dataset = "Unknown") {
+        CsvWriter writer(filename,
+                         {"dataset", "nlist", "nprobe", "divideIVF", "disableOrderOptimize", "cut", "block", "worker", 
+                          "time_speedup", "query_time",
+                          "recall", "r2"},
+                         append, false);
+        summary();
+        writer << dataset << nlist << nprobe <<  divideIVF << disableOrderOptimize << cut << block << worker
+               << blockVersionSpeedUpWithOriginal << query_time
                << recall << r2 << std::endl;
     }
 };

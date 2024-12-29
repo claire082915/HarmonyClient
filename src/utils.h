@@ -373,7 +373,7 @@ public:
         if(time > 1) {
             star = "***";
         }
-        std::cout << color << format("[{}:{:>30}]:{:.2f}s  {}" ,name ,s, time, star) << RESET << std::endl;
+        std::cout << color << format("[{}:{:>30}]:{:.4f}s  {}" ,name ,s, time, star) << RESET << std::endl;
     }
     void reset() {
         watch.reset();

@@ -42,7 +42,6 @@ public:
             cout << ",block_dim:" << block_dim;
             cout << ",nb:" << nb;
             cout << "]";
-            cout << RESET;
             cout << endl;
         }
     };
@@ -418,7 +417,6 @@ public:
             cout << ",startIVFId:" << startIVFId;
             cout << ",ivfCount:" << ivfCount;
             cout << "]";
-            cout << RESET;
             cout << endl;
         }
     };
@@ -455,13 +453,25 @@ public:
         listSizes = std::make_unique<size_t[]>(info.ivfCount);
         MPI_Recv(listSizes.get(), info.ivfCount * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
+        size_t totalNb = 0;
+        for(int i = 0; i < info.ivfCount; i++) {
+            totalNb += listSizes[i];
+        }
+
         listCodes = vector<std::unique_ptr<float[]>>(info.ivfCount); //每个聚类对应的codes
         listIds = vector<std::unique_ptr<size_t[]>>(info.ivfCount); //每个聚类对应的ids
+        
+        // auto curCodes = listCodes.get();
+        // auto curIds = listIds.get();
         for (size_t i = 0; i < info.ivfCount; i++) {
             listCodes[i] = std::make_unique<float[]>(listSizes[i] * info.d);
-            listIds[i] = std::make_unique<size_t[]>(listSizes[i] * info.d);
+            listIds[i] = std::make_unique<size_t[]>(listSizes[i]);
             MPI_Recv(listCodes[i].get(), listSizes[i] * info.d , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             MPI_Recv(listIds[i].get(), listSizes[i] * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            // MPI_Recv(curCodes, listSizes[i] * info.d , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            // MPI_Recv(curIds, listSizes[i] * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            // curCodes += listSizes[i] * info.d;
+            // curIds += listSizes[i];
         }
         watch.print("listCodes and listIds");
 
@@ -509,36 +519,27 @@ public:
         uniWatch.print(format("node {} finish init", rank), false);
 
     }
-    float* getCodes(idx_t ivfId) {
-        idx_t index = ivfId - info.startIVFId;
-        return listCodes[index].get();
-    }
-    size_t* getIds(idx_t ivfId) {
-        idx_t index = ivfId - info.startIVFId;
-        return listIds[index].get();
-    }
-    size_t getListSize(idx_t ivfId) {
-        idx_t index = ivfId - info.startIVFId;
-        return listSizes[index];
-    }
-    bool isResponsible(idx_t ivfId) {
-        return ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount;
-    }
+    
+    
+    void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
+        // std::cout << BLUE << "simple version of search" << RESET;
+        //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
 
-    void search() {
-        uniWatch.print(format("node {} start search", rank), false);
-        
-        auto scaners = vector<unique_ptr<IVFScanBase>>(omp_get_max_threads());
-        for(int i = 0; i < scaners.size(); i++) {
-            scaners[i] = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k));  // 在聚类中心内部搜
-        }
-        uniWatch.print(format("node {} malloc ", rank), false);
-#pragma omp parallel for 
-        for(size_t q = 0; q < nq; q++) {
-            // auto scaner = scaners[omp_get_thread_num()].get();
-            // scaner->set_query(querys.get() + q * info.d);
-            for (size_t i = 0; i < info.nprobe; i++) {
-                idx_t ivfId = listidqueries[q * info.nprobe + i];
+        std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k)); 
+
+        //下面四个向量都和i绑定，也就是和每一个查询绑定
+        float* disi = distances; //结果，查询向量最近的k个向量的距离
+        idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
+        idx_t* listids = listidqueries.get();             // 单个查询对应的IVF聚类中心id
+        MyStopWatch w;
+        for (size_t i = 0; i < n; i++) {
+            //每一个i对应一个查询
+            scaner->set_query(queries + i * info.d);
+
+            for (size_t j = 0; j < info.nprobe; j++) {
+                //在第j个聚类中搜索所有点
+
+                idx_t ivfId = listids[j];
                 if(!(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount)) {
                     continue;
                 }
@@ -546,20 +547,82 @@ public:
                 size_t listSize = listSizes[index];
                 float* codes = listCodes[index].get();
                 size_t* ids = listIds[index].get();
-                float* simi = distances.get() + q * k;
-                idx_t* idxi = labels.get() + q * k;
-                // scaner->lite_scan_codes(listSize, codes, ids, distances.get() + q * k, labels.get() + q * k);
-                for (size_t j = 0; j < listSize; j++) {
-                    //和每一个待比较向量进行比较，每一个i和一个待比较向量绑定
-                    const float* candicate = codes + j * info.d;
-                    float dis = calculatedEuclideanDistance(querys.get() + q * info.d, candicate, info.d);
-                    if (dis < simi[0]) {
-                        //比堆顶
-                        heap_replace_top<METRIC_L2>(k, simi, idxi, dis, ids[j]);
-                    }
-                }
+
+
+                // MyStopWatch wa;
+                scaner->lite_scan_codes(listSize, codes, ids, disi, idxi);
+                // if(i == 3) {
+                    // cout << RED << listSize << RESET << endl;
+                    // wa.print(format("q {} ivf {}", i, j), false);
+                // }
+            }
+            disi += k;
+            idxi += k;
+            // w.print(format("q {}", i));
+        }
+    }
+
+    void search() {
+        uniWatch.print(format("node {} start search", rank), false);
+
+        size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), nq);
+        size_t batch_size = nq / nt;
+        size_t extra = nq % nt;
+        cout << nt << endl;
+#pragma omp parallel for num_threads(nt)
+        for (size_t i = 0; i < nt; i++) {
+            size_t start, end;
+            if (i < extra) {
+                start = i * (batch_size + 1);
+                end = start + batch_size + 1;
+            } else {
+                start = i * batch_size + extra;
+                end = start + batch_size;
+            }
+            if (start < end) {
+                // end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k
+                // 是结果存放的起始位置
+
+                // cout << format("thread {} {}", omp_get_thread_num(), start) << endl;
+                MyStopWatch w;
+                single_thread_search_simple(end - start, querys.get() + start * info.d, k, distances.get() + start * k, labels.get() + start * k);
+                // w.print(format("single thread {}", i));
             }
         }
+// #pragma omp parallel for schedule(dynamic)
+//         for(size_t q = 0; q < nq; q++) {
+//             // size_t nt = omp_get_num_threads();
+//             // cout << nt << endl;
+//             // auto scaner = scaners[omp_get_thread_num()].get();
+//             // scaner->set_query(querys.get() + q * info.d);
+//             // float* simi = distances.get() + q * k;
+//             // idx_t* idxi = labels.get() + q * k;
+//             // float* query = querys.get() + q * info.d;
+//             for (size_t i = 0; i < info.nprobe; i++) {
+//                 idx_t ivfId = listidqueries[q * info.nprobe + i];
+//                 // if(!(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount)) {
+//                 //     continue;
+//                 // }
+//                 idx_t index = ivfId - info.startIVFId;
+//                 size_t listSize = listSizes[index];
+//                 // float* codes = listCodes[index].get();
+//                 // size_t* ids = listIds[index].get();
+//                 // scaner->lite_scan_codes(listSize, codes, ids, distances.get() + q * k, labels.get() + q * k);
+//                 for (size_t j = 0; j < listSize; j++) {
+//                     //和每一个待比较向量进行比较，每一个i和一个待比较向量绑定
+//                     // const float* candicate = codes + j * info.d;
+//                     // float dis = calculatedEuclideanDistance(query, candicate, info.d);
+//                     // if (dis < simi[0]) {
+//                     //     //比堆顶
+//                     //     heap_replace_top<METRIC_L2>(k, simi, idxi, dis, ids[j]);
+//                     //     // simi[0] = dis;
+//                     // }
+//                         //比堆顶
+//                     heap_replace_top<METRIC_L2>(k, distances.get(), labels.get(), 0, 0);
+//                         // simi[0] = dis;
+//                 }
+//             }
+//         }
         uniWatch.print(format("node {} search", rank), false);
         MPI_Send(distances.get(), k * nq, MPI_FLOAT, 0, 0, MPI_COMM_WORLD); 
         MPI_Send(labels.get(), k * nq, MPI_INT64_T, 0, 0, MPI_COMM_WORLD); 

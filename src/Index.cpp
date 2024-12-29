@@ -49,9 +49,15 @@ Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel 
 
 void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param) {
     if(param.mode == SearchMode::ORIGINAL) {
+        return;
+    }
 
-    } else if(param.mode == SearchMode::DIVIDE_IVF) {
-        this->workerCount = workerCount;
+    this->workerCount = workerCount;
+    this->blockCount = blockCount;
+    this->warmUpSearchList = warmUpSearchList;
+    this->warmUpSearchListSize = warmUpSearchListSize;
+
+    if(param.mode == SearchMode::DIVIDE_IVF) {
 
         for(size_t rank = 1; rank <= workerCount; rank++) {
             size_t beginIVF = (rank - 1) * (nlist / workerCount); 
@@ -81,14 +87,7 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
             }
         }
 
-        MPI_Barrier(MPI_COMM_WORLD);
-        uniWatch = MyStopWatch(false, "masterUniWatch", CRAN);
-        uniWatch.print("master cross barrier");
     } else {
-        this->workerCount = workerCount;
-        this->blockCount = blockCount;
-        this->warmUpSearchList = warmUpSearchList;
-        this->warmUpSearchListSize = warmUpSearchListSize;
         MyStopWatch watch(true);
         assert(d % workerCount == 0);
         // assert(nq % blockCount == 0);
@@ -191,11 +190,10 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
             MPI_Send(recvPrevWorker[rank].data(), blockCount, MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
         }
         watch.print("ordering");
-
-        MPI_Barrier(MPI_COMM_WORLD); 
-        uniWatch = MyStopWatch(false, "masterUniWatch", CRAN);
-        uniWatch.print("master cross barrier");
     }
+    MPI_Barrier(MPI_COMM_WORLD);
+    uniWatch = MyStopWatch(false, "masterUniWatch", CRAN);
+    uniWatch.print("master cross barrier");
 }
 
 Index& Index::operator=(Index&& other) noexcept {
