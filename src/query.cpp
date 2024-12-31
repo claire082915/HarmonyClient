@@ -143,10 +143,13 @@ int main(int argc, char* argv[]) {
     bool divideIVF = program.get<bool>("divideIVF");
     bool disableOrderOptimize = program.get<bool>("disableOrderOpt");
     bool cut = program.get<bool>("cut");
+    bool run_faiss = program.get<bool>("run_faiss");
 
     if (rank != 0) {
-        MPI_Barrier(MPI_COMM_WORLD);
-        workerMain(rank, cut, divideIVF);
+        if(!run_faiss) {
+            MPI_Barrier(MPI_COMM_WORLD);
+            workerMain(rank, cut, divideIVF);
+        }
     } else {
         cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
         
@@ -167,7 +170,6 @@ int main(int argc, char* argv[]) {
         std::string input_format = program.get<std::string>("input_format");
         std::string output_format = program.get<std::string>("output_format");
         std::string metric_str = program.get<std::string>("metric");
-        bool run_faiss = program.get<bool>("run_faiss");
         MetricType metric;
         size_t loop = program.get<size_t>("loop");
         size_t nlist = program.get<size_t>("nlist");
@@ -573,6 +575,7 @@ int main(int argc, char* argv[]) {
                     Index::Param oriParam;
                     oriParam.mode = Index::SearchMode::ORIGINAL;
                     Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
+                    oriStat.print();
                     MPI_Barrier(MPI_COMM_WORLD);
 
                     std::cout << YELLOW;
