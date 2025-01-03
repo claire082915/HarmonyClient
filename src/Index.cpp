@@ -91,7 +91,9 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
         MyStopWatch watch(true);
         assert(d % workerCount == 0);
         // assert(nq % blockCount == 0);
-        Worker::InitInfo info = Worker::InitInfo(d, d / workerCount, workerCount, nlist, blockCount, nprobe, nb);
+        presumeTotalQueryCompareSize = presumeNq / nlist * nprobe * nb * 2;
+        cout << "presume" << presumeTotalQueryCompareSize << endl;
+        Worker::InitInfo info = Worker::InitInfo(d, d / workerCount, workerCount, nlist, blockCount, nprobe, nb, presumeTotalQueryCompareSize / blockCount);
         // 1. Info
         MPI_Bcast(&info, sizeof(Worker::InitInfo), MPI_BYTE, 0, MPI_COMM_WORLD);
         watch.print("Info");
@@ -109,18 +111,33 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
             // printVector(list.candidate_codes.get(), d, YELLOW);
         }
         watch.print("listSizes, listCodes");
-        // printVector(listSizes.get(), nlist, YELLOW);
-        // cout << "finish initWorkers" << endl;
-        presumeTotalQueryCompareSize = 10000 * nb;
-        distancesForNQuerys = std::make_unique<float[]>(presumeTotalQueryCompareSize);
-        distancesResultBuffer = std::make_unique<float[]>(presumeTotalQueryCompareSize);
-        watch.print("malloc blockBuffer1");
 
-        blockDistancesBuffer = vector<unique_ptr<float[]>>(blockCount);
-        for (size_t i = 0; i < blockCount; i++) {
-            blockDistancesBuffer[i] = std::make_unique<float[]>(presumeTotalQueryCompareSize / blockCount);
+        // if(presumeTotalQueryCompareSize > INT_MAX) {
+        //     presumeTotalQueryCompareSize /= (nlist / nprobe);
+        // }
+        // cout << presumeTotalQueryCompareSize << "presume" << endl;
+        // if(presumeTotalQueryCompareSize > threashHold) {
+        //     //所有block共用一个buffer
+        //     cout << "reach threashHold" << threashHold << endl;
+        //     distancesForNQuerys = std::make_unique<float[]>(presumeNq / blockCount * nb);
+        // } else {
+        //     distancesForNQuerys = std::make_unique<float[]>(presumeTotalQueryCompareSize);
+        // }
+        try {
+            distancesForNQuerys = std::make_unique<float[]>(presumeTotalQueryCompareSize);
+        } catch (const std::bad_alloc& e) {
+            // Handle memory allocation failure
+            cerr << YELLOW << "block malloc distancesForNQuerys" << RESET << endl;
+            try {
+                distancesForNQuerys = std::make_unique<float[]>(presumeTotalQueryCompareSize / blockCount);
+                blockMalloc = true;
+            } catch (const std::bad_alloc& e) {
+                cerr << RED << "bad malloc distancesForNQuerys" << RESET << endl;
+                exit(1);
+            }
         }
         watch.print("malloc blockBuffer");
+        
 
         // Search顺序
         workerSearchBlockOrder = vector<vector<idx_t>>(workerCount + 1);
@@ -146,7 +163,7 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
             MPI_Send(workerSearchBlockOrder[i].data(), blockCount, MPI_INT64_T, i, 0, MPI_COMM_WORLD);
         }
         for (size_t i = 1; i <= workerCount; i++) {
-            printVector(workerSearchBlockOrder[i], BLUE);
+            // printVector(workerSearchBlockOrder[i], BLUE);
         }
 
         //对于每一个块，其搜索的顺序，即一系列rank
@@ -173,10 +190,10 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
         }
         for (size_t block = 0; block < blockCount; block++) {
             for (size_t rankOrder = 0; rankOrder < workerCount - 1; rankOrder++) {
-            size_t senderRank = blockSearchedOrder[block][rankOrder];
-            size_t recvRank = blockSearchedOrder[block][rankOrder + 1];
-            sendNextWorker[senderRank][block] = recvRank;  
-            recvPrevWorker[recvRank][block] = senderRank;  
+                size_t senderRank = blockSearchedOrder[block][rankOrder];
+                size_t recvRank = blockSearchedOrder[block][rankOrder + 1];
+                sendNextWorker[senderRank][block] = recvRank;  
+                recvPrevWorker[recvRank][block] = senderRank;  
             }
         }
         // for(size_t rank = 1; rank <= workerCount; rank++) {
@@ -192,7 +209,7 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
         watch.print("ordering");
     }
     MPI_Barrier(MPI_COMM_WORLD);
-    uniWatch = MyStopWatch(false, "masterUniWatch", CRAN);
+    uniWatch = MyStopWatch(true, "masterUniWatch", CRAN);
     uniWatch.print("master cross barrier");
 }
 
@@ -995,6 +1012,7 @@ void Index::single_thread_search_block(size_t n, const float* queries, size_t k,
     watch.print("BroadCast heaptops");
 
 
+    cout << totalQueryCompareSize << endl;
     if (presumeTotalQueryCompareSize < totalQueryCompareSize) {
         distancesForNQuerys = std::make_unique<float[]>(totalQueryCompareSize);
     }

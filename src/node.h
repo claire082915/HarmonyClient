@@ -22,17 +22,19 @@ public:
         size_t d, block_dim, workerCount;
         size_t nlist;
         size_t blockCount, nprobe, nb;
+        idx_t presumeBlockDistancesSize;
         InitInfo(size_t d, size_t block_dim, size_t workerCount, size_t nlist, size_t blockCount, size_t nprobe,
-                 size_t nb)
+                 size_t nb, idx_t presumeBlockDistancesSize)
             : d(d),
               block_dim(block_dim),
               workerCount(workerCount),
               nlist(nlist),
               blockCount(blockCount),
               nprobe(nprobe),
-              nb(nb)
+              nb(nb),
+              presumeBlockDistancesSize(presumeBlockDistancesSize)
               {}
-        InitInfo() : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0)  {}
+        InitInfo() : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0), presumeBlockDistancesSize(0)  {}
         void print() {
             cout << GREEN << "InitInfo:[";
             cout << "d:" << d;
@@ -41,6 +43,7 @@ public:
             cout << ",worker:" << workerCount;
             cout << ",block_dim:" << block_dim;
             cout << ",nb:" << nb;
+            cout << ",presume:" << presumeBlockDistancesSize;
             cout << "]";
             cout << endl;
         }
@@ -63,8 +66,96 @@ public:
     std::unique_ptr<float[]> heapTops;
 
     // 每一块的计算结果的临时存储
-    vector<std::unique_ptr<float[]>> distancesForBlocks;
-    size_t blockDistancesSize;
+    class DistanceBufferPool {
+        vector<std::unique_ptr<float[]>> distancesForBlocks;
+        vector<int> blockIds; //distancesForBlocks每一个的blockid是什么
+        vector<bool> used; // distancesForBlocks是否正在被使用
+
+        bool useDynamicAlloc = false; //如果为真则distancesForBlocks的下标不代表blockid， 否则代表
+        size_t size = 0;
+
+    public:
+
+        DistanceBufferPool(const InitInfo& info) {
+            distancesForBlocks = vector<std::unique_ptr<float[]>>(info.blockCount);
+            try {
+                for (size_t i = 0; i < info.blockCount; i++) {
+                    distancesForBlocks[size] = std::make_unique<float[]>(info.presumeBlockDistancesSize);
+                    size++;
+                    cout << format("buffer {}", size) << endl;
+                }
+            } catch (const std::bad_alloc& e) { 
+                useDynamicAlloc = true;
+                blockIds = vector<int>(size, -1);
+                used = vector<bool>(size, false);
+            }
+            cout << format("buffer {}", size) << endl;
+        }
+        float* getBuffer(size_t blockId) {
+            if(!useDynamicAlloc) {
+                return distancesForBlocks[blockId].get();
+            }
+            for (int i = 0; i < size; i++) {
+                if(used[i] && (blockIds[i] == blockId)) {
+                    return distancesForBlocks[i].get();
+                }
+            }
+            cerr << RED << format("getBuffer {} not found", blockId) << RESET << endl;
+            return nullptr;
+        }
+
+        bool IRecv(size_t blockId, size_t compareSize, size_t sender, MPI_Request* req) {
+            if(!useDynamicAlloc) {
+                MPI_Irecv(distancesForBlocks[blockId].get(), compareSize, MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, req);
+                return true;
+            } else {
+                for (int i = 0; i < size; i++) {
+                    if(used[i] == false) {
+                        used[i] = true;
+                        blockIds[i] = blockId;
+                        MPI_Irecv(distancesForBlocks[i].get(), compareSize, MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, req);
+                        cout << format("Irecv {}", blockId) << endl;
+                        return true;
+                    }
+                }
+                // cerr << ""
+                return false;
+            }
+        }
+        bool use(size_t blockId) {
+            if(!useDynamicAlloc) {
+                return true;
+            } else {
+                for (int i = 0; i < size; i++) {
+                    if(used[i] == false) {
+                        used[i] = true;
+                        blockIds[i] = blockId;
+                        cout << format("use {}", blockId) << endl;
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+        bool releaseBuffer(size_t blockId) {
+            if(!useDynamicAlloc) {
+                return true;
+            } else {
+                for (int i = 0; i < size; i++) {
+                    if(used[i] && (blockIds[i] == blockId)) {
+                        used[i] = false;
+                        blockIds[i] = -1;
+                        cout << format("release {}", blockId) << endl;
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+    };
+    std::unique_ptr<DistanceBufferPool> distanceBufferPool;
+
+    // idx_t presumeBlockDistancesSize;
     InitInfo info;
 
     void addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer);
@@ -94,6 +185,7 @@ public:
 
         // InitInfo
         MPI_Bcast(&info, sizeof(InitInfo), MPI_BYTE, 0, MPI_COMM_WORLD);
+        info.print();
 
         // IVF的大小，IVF的向量表示
         listSizes = std::make_unique<size_t[]>(info.nlist);
@@ -123,18 +215,23 @@ public:
         recvPrevWorker = std::make_unique<idx_t[]>(info.blockCount);
 
         // blockSize = presumeNq / info.blockCount;
-        blockDistancesSize = presumeNq / info.blockCount * info.nb;
-        distancesForBlocks = vector<std::unique_ptr<float[]>>(info.blockCount);
-        for (size_t i = 0; i < info.blockCount; i++) {
-            distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
-        }
+        // presumeBlockDistancesSize = presumeNq / info.blockCount * info.nb * 2;
+        // cout << presumeBlockDistancesSize << "blockD" << endl;
+        distanceBufferPool = std::make_unique<DistanceBufferPool>(info);
+        watch.print(format("node {} distancesForBlocks", rank));
 
         disRequests = vector<MPI_Request>(info.blockCount);
         sendRequests = vector<MPI_Request>(info.blockCount);
 
+        //初始化sendNextWorker, recvPrevWorker
+        // sendNextWorker = std::make_unique<idx_t[]>(info.blockCount);
+        // recvPrevWorker = std::make_unique<idx_t[]>(info.blockCount);
+        MPI_Recv(sendNextWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(recvPrevWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
         MPI_Barrier(MPI_COMM_WORLD); //对应preSearch最后的barrier
 
-        uniWatch = MyStopWatch(false, "uniWatch", MAG);
+        uniWatch = MyStopWatch(true, "uniWatch", MAG);
         uniWatch.print(format("node {} cross barrier", rank), false);
 
         // nq, querys
@@ -171,28 +268,13 @@ public:
         //     cout << format("Q{}, top{}", i, heapTops[i]) << endl;
         // }
 
-        //初始化sendNextWorker, recvPrevWorker
-        // sendNextWorker = std::make_unique<idx_t[]>(info.blockCount);
-        // recvPrevWorker = std::make_unique<idx_t[]>(info.blockCount);
-        MPI_Recv(sendNextWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        MPI_Recv(recvPrevWorker.get(), info.blockCount, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        uniWatch.print(format("node {} sendNextWorker", rank), false);
 
         // 其他初始化
         blockSize = nq / info.blockCount;
-        blockDistancesSize = blockSize * info.nb;
-        // distancesForBlocks = vector<std::unique_ptr<float[]>>(blockDistancesSize);
-        // for (size_t i = 0; i < info.blockCount; i++) {
-        //     distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
-        // }
-        uniWatch.print(format("node {} distancesForBlocks", rank), false);
+        
 
         // 初始化request, status, 
-        // infoRequests = vector<MPI_Request>(info.blockCount);
-        // disRequests = vector<MPI_Request>(info.blockCount);
-        // statuses = vector<MPI_Status>(info.blockCount);
-        // cout << CRAN << "finish init" << rank << RESET << endl;
-        // cout << RED << rank << RESET << endl;
+        
         watch.print(format("Node {} Init", rank));
         uniWatch.print(format("node {} finish init", rank), false);
 
@@ -203,65 +285,60 @@ public:
         copy_n_partial_vector(querys, this->querys.get(), info.d, info.block_dim, info.block_dim * (rank - 1), nq);
     }
 
-    struct SearchResultInfo {
-        // std::unique_ptr<float[]> distances;
-        size_t size;
-        size_t blockId;
-        SearchResultInfo(size_t sz, size_t blockId) : size(sz), blockId(blockId) {}
-
-        SearchResultInfo() : size(0), blockId(0) {}
-        void print() {
-            string formatted_string = std::format("SINFO:[Block({}), Size({})]", blockId, size);
-            cout << BLUE << formatted_string << RESET << endl;
-        }
-    };
-    
-    enum SearchResultTag {
-        INFO,
-        DISTANCES,
-        CUTIDS,
-    };
-    SearchResultInfo resultInfo;
-
     void search(bool cut) {
         uniWatch.print(format("node {} search() start", rank), false);
         MyStopWatch totalWatch(true);
         int searchedBlockCount = 0;
         vector<bool> isBlockSearched = vector<bool>(info.blockCount);
+
+        //先给可以算的分配内存
         for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
             if(recvPrevWorker[blockId] == 0) {
-                searchBlock(blockId, cut);
-                isBlockSearched[blockId] = true;
-                searchedBlockCount++;
-            } else {
-                size_t sender = recvPrevWorker[blockId];
-                // size
-                idx_t size;
-                // tag 当做blockId
-                MPI_Irecv(distancesForBlocks[blockId].get(), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
-                // cout << format("node({}) waiting for block({}) from node({})", rank, blockId, sender) << endl;
+                //直接标记使用
+                distanceBufferPool->use(blockId);
             }
+        }
+         for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
+            if(recvPrevWorker[blockId] != 0) {
+                size_t sender = recvPrevWorker[blockId];
+                // tag 当做blockId
+                // MPI_Irecv(distancesForBlocks[blockId].get(), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
+                // MPI_Irecv(distanceBufferPool->getBuffer(blockId), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
+                bool suc = distanceBufferPool->IRecv(blockId, getTotalQueryCompareSize(blockId), sender, &disRequests[blockId]);
+                if(!suc) {
+                    break;
+                }
+                // cout << format("node({}) waiting for block({}) from node({})", rank, blockId, sender) << endl;
+            } 
         }
 
         //不断查
-        MyStopWatch watch(true);
+        MyStopWatch watch(false);
         while(searchedBlockCount < info.blockCount)
         for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
             if(isBlockSearched[blockId]) {
                 continue;
             }
-            int isReceived;
-            MPI_Status stat;
-            MPI_Test(&disRequests[blockId], &isReceived, &stat);
-            if(isReceived) {
-                // cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
-                watch.print(format("node {} wait", rank));
+            if(recvPrevWorker[blockId] == 0) {
+                // searchBlock(blockId, cut);
                 searchBlock(blockId, cut);
-                watch.reset();
-                searchedBlockCount++;
                 isBlockSearched[blockId] = true;
+                searchedBlockCount++;
             } else {
-                // cout << format("node({}) not receving block({})",rank, blockId) << endl;
+                int isReceived;
+                MPI_Status stat;
+                MPI_Test(&disRequests[blockId], &isReceived, &stat);
+                if(isReceived) {
+                    // cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
+                    watch.print(format("node {} wait", rank));
+                    // searchBlock(blockId, cut);
+                    searchBlock(blockId, cut);
+                    watch.reset();
+                    searchedBlockCount++;
+                    isBlockSearched[blockId] = true;
+                } else {
+                    // cout << format("node({}) not receving block({})",rank, blockId) << endl;
+                }
             }
         }
         totalWatch.print(format("Search Finished node({}), total skip:{:.1f}%", rank, (double)totalSkip / totalCompare * 100));
@@ -286,7 +363,7 @@ public:
     void searchBlock(size_t blockId, bool cut) {
         MyStopWatch searchWatch(true);
 
-        auto clock1 = std::chrono::high_resolution_clock::now();
+        float* distanceBuffer = distanceBufferPool->getBuffer(blockId);
 
         size_t queryStart = blockId * blockSize;
         size_t totalQueryCompareSize = getTotalQueryCompareSize(blockId);
@@ -295,8 +372,8 @@ public:
         //      << endl;
 
 
-        if (totalQueryCompareSize > blockDistancesSize) {
-            cerr << "Error search" << endl;
+        if (totalQueryCompareSize > info.presumeBlockDistancesSize) {
+            cerr << "Error blockDistancesSize too small" << endl;
             exit(1);
         }
 
@@ -315,7 +392,8 @@ public:
                 idx_t ivfId = listidqueries[q * info.nprobe + i];
                 for (size_t v = 0; v < listSizes[ivfId]; v++) {
                     if(cut) {
-                        if(distancesForBlocks[blockId][queryOffset + curDistancePosition] == INFINITY) {
+                        // if(distancesForBlocks[blockId][queryOffset + curDistancePosition] == INFINITY) {
+                        if(distanceBuffer[queryOffset + curDistancePosition] == INFINITY) {
                             skip++;
                         } else {
                             float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
@@ -324,9 +402,9 @@ public:
                             // cout << " " << queryOffset + curDistancePosition  << endl;
                             
                             // assert(queryOffset + curDistancePosition < totalQueryCompareSize);
-                            distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
-                            if (distancesForBlocks[blockId][queryOffset + curDistancePosition] > heapTops[q]) {
-                                distancesForBlocks[blockId][queryOffset + curDistancePosition] = INFINITY;
+                            distanceBuffer[queryOffset + curDistancePosition] += dis;
+                            if (distanceBuffer[queryOffset + curDistancePosition] > heapTops[q]) {
+                                distanceBuffer[queryOffset + curDistancePosition] = INFINITY;
                             }
                         }
                         curDistancePosition++;
@@ -336,7 +414,7 @@ public:
                                                                 info.block_dim);
                         // cout << " " << queryOffset + curDistancePosition  << endl;
                         assert(queryOffset + curDistancePosition < totalQueryCompareSize);
-                        distancesForBlocks[blockId][queryOffset + curDistancePosition] += dis;
+                        distanceBuffer[queryOffset + curDistancePosition] += dis;
                         curDistancePosition++;
                     }
                     
@@ -345,44 +423,19 @@ public:
             // cout << curDistancePosition << " " << queryCompareSize[q] << endl;
             assert(curDistancePosition == queryCompareSize[q]);
         }
-// #pragma omp parallel for 
-        //  for (size_t q = queryStart; q < queryStart + blockSize; q++) {
-        //     size_t queryOffset =
-        //         queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
-        //     for (size_t i = 0; i < queryCompareSize[q]; i++){
-        //         if(heapTops[q] < distancesForBlocks[blockId][queryOffset + i]) {
-        //             skip++;
-        //         }
-        //     }
-        // }
-
-        // malloc0.3s, search0.9s
-        // auto clock2 = std::chrono::high_resolution_clock::now();
-        // std::cout << "node" << rank << '|' << blockId << "| search"
-        // << std::chrono::duration<double>(clock2 - clock1).count() << "s" << std::endl;
-        resultInfo = SearchResultInfo(totalQueryCompareSize, blockId);
-        // auto clock3 = std::chrono::high_resolution_clock::now();
-        // MPI_Send(&resultInfo, sizeof(SearchResultInfo), MPI_BYTE, sendNextWorker[blockId], SearchResultTag::INFO, MPI_COMM_WORLD);
-        // cout << totalQueryCompareSize * sizeof(float) << endl;
-        
-        // cout << format("node({}) send block({}) to node({})", rank, blockId, sendNextWorker[blockId]) << endl;
 
         uniWatch.print(format("ready to perform node({}) -> block({}) -> node({})", rank, blockId, sendNextWorker[blockId]), false);
-        MyStopWatch watch(true);
-        // MPI_Request req;
-        MPI_Isend(distancesForBlocks[blockId].get(), totalQueryCompareSize, MPI_FLOAT, sendNextWorker[blockId], blockId,
+        MyStopWatch watch(false);
+        MPI_Isend(distanceBuffer, totalQueryCompareSize, MPI_FLOAT, sendNextWorker[blockId], blockId,
                  MPI_COMM_WORLD, &sendRequests[blockId]);
-        // MPI_Request_free(&req);
 
         watch.print(format("node({}) -> block({}) -> node({}) 传输时间", rank, blockId, sendNextWorker[blockId]));
-        //  
-               // return SearchResultInfo(move(distancesForBlocks[blockId]), totalQueryCompareSize, blockId);
-        // std::cout << "node" << rank << '|' << blockId << "| send"
-        // << std::chrono::duration<double>(clock3 - clock2).count() << "s" << std::endl;
 
-        // cout << format("node:{} block:{} skip:{:<-10} {:.1f}%", rank, blockId, skip, (double)skip / totalQueryCompareSize * 100) << endl;
         totalSkip += skip;
         totalCompare += totalQueryCompareSize;
+
+        distanceBufferPool->releaseBuffer(blockId);
+
         searchWatch.print(format("node({}) search block({}) skip:{:.1f}%", rank, blockId, (double)skip / totalQueryCompareSize * 100));
     }
 };

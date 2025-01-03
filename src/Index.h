@@ -84,17 +84,19 @@ class Index {
     std::unique_ptr<idx_t[]> centroid_ids; //聚类中心id，通常是1,2,3,...
     // std::unique_ptr<tribase::Node[]> nodes; 
     std::unique_ptr<float[]> distancesForNQuerys;
-    size_t presumeTotalQueryCompareSize = 0;
-    std::unique_ptr<float[]> distancesResultBuffer;
-    std::vector<std::unique_ptr<float[]>> blockDistancesBuffer;
+    idx_t presumeTotalQueryCompareSize = 0;
+    // std::vector<std::unique_ptr<float[]>> blockDistancesBuffer;
     std::vector<vector<idx_t>> workerSearchBlockOrder; //每一个worker对应的计算block的id排序
     std::vector<vector<idx_t>> blockSearchedOrder; 
     size_t warmUpSearchList = 0;
     size_t warmUpSearchListSize = 0;
 
-    size_t presumeNq = 10000, presumeK = 1000;
+    idx_t presumeNq = 10000, presumeK = 1000;
     std::vector<std::unique_ptr<float[]>> distancesHeapBuffer;
     std::vector<std::unique_ptr<idx_t[]>> labelsHeapBuffer;
+
+    // idx_t threashHold = INT_MAX;
+    bool blockMalloc = false; //distanceForNQuerys是不是只是一个block的，还是所有block的
 
     
 };

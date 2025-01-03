@@ -333,11 +333,11 @@ int main(int argc, char* argv[]) {
                 cerr << RED << "Error: nq % block must be 0" << RESET << endl;
                 return 1;
             }
-            double blockResultSize = (double)nq / blockCount * nb;
-            if(blockResultSize > INT_MAX) {
-                cerr << RED << "blockResultSize" << blockResultSize << ", too few blocks" << RESET <<endl;
-                return 1;
-            }
+            // double blockResultSize = (double)nq / blockCount * nb;
+            // if(blockResultSize > INT_MAX) {
+            //     cerr << RED << "blockResultSize" << blockResultSize << ", too few blocks" << RESET <<endl;
+            //     return 1;
+            // }
             if(divideIVF) {
                 cerr << RED << "divideIVF and block cannot be provided together" << RESET <<endl;
                 return 1;
@@ -574,8 +574,8 @@ int main(int argc, char* argv[]) {
                     // else {
                     Index::Param oriParam;
                     oriParam.mode = Index::SearchMode::ORIGINAL;
-                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
-                    oriStat.print();
+                    // Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
+                    // oriStat.print();
                     MPI_Barrier(MPI_COMM_WORLD);
 
                     std::cout << YELLOW;
@@ -592,8 +592,8 @@ int main(int argc, char* argv[]) {
 
                     if (param.mode != Index::SearchMode::ORIGINAL) {
                         Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
-                        stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
-                        cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
+                        // stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
+                        // cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
                         stat.print();
                         stat.myToCsv(log_path, true, dataset);
                     } 
