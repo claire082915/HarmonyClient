@@ -41,7 +41,7 @@ class Index {
 
     void single_thread_nearest_cluster_search(size_t n, const float* queries, float* distances, idx_t* labels);
     void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
-//     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
+    void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
     void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void add(size_t n, const float* codes);

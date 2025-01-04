@@ -574,8 +574,8 @@ int main(int argc, char* argv[]) {
                     // else {
                     Index::Param oriParam;
                     oriParam.mode = Index::SearchMode::ORIGINAL;
-                    // Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
-                    // oriStat.print();
+                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
+                    oriStat.print();
                     MPI_Barrier(MPI_COMM_WORLD);
 
                     std::cout << YELLOW;

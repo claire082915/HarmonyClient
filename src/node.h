@@ -14,6 +14,7 @@
 #include "IVFScan.hpp"
 namespace tribase {
 
+
 using namespace std;
 class Worker {
 private:
@@ -43,7 +44,7 @@ public:
             cout << ",worker:" << workerCount;
             cout << ",block_dim:" << block_dim;
             cout << ",nb:" << nb;
-            cout << ",presume:" << presumeBlockDistancesSize;
+            cout << ",presume:" << presumeBlockDistancesSize / 1000000000 << "GB";
             cout << "]";
             cout << endl;
         }
@@ -60,9 +61,9 @@ public:
     // std::unique_ptr<SearchBlock[]> blocks;       // 按照搜索顺序排列，第1个先搜索
     std::unique_ptr<idx_t[]> blockSearchOrder;   // search block的顺序，第i个元素是第i个要进行search的blockId
     std::unique_ptr<idx_t[]> listidqueries;      // nq * nprobe 查询向量相近的聚类id
-    std::unique_ptr<size_t[]> queryCompareSize;  // nq * nprobe 查询向量相近的聚类id
+    std::unique_ptr<idx_t[]> queryCompareSize;  // nq * nprobe 查询向量相近的聚类id
     // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
-    std::unique_ptr<size_t[]> queryCompareSizePreSum;
+    std::unique_ptr<idx_t[]> queryCompareSizePreSum;
     std::unique_ptr<float[]> heapTops;
 
     // 每一块的计算结果的临时存储
@@ -70,25 +71,67 @@ public:
         vector<std::unique_ptr<float[]>> distancesForBlocks;
         vector<int> blockIds; //distancesForBlocks每一个的blockid是什么
         vector<bool> used; // distancesForBlocks是否正在被使用
-
+        size_t spareBlock = 0;
         bool useDynamicAlloc = false; //如果为真则distancesForBlocks的下标不代表blockid， 否则代表
         size_t size = 0;
 
+        struct Action {
+            bool use;
+            size_t blockId;
+            idx_t compareSize;
+            size_t sender;
+            Action(size_t blockId) : blockId(blockId) {
+                use = true;
+            }
+            Action(size_t blockId, idx_t compareSize, size_t sender) 
+            : blockId(blockId), compareSize(compareSize), sender(sender) {
+                use = false;
+            }
+        };
+        queue<Action> waitList; //bool代表是不是use
+
+        void IRecvSplit(float* buffer, size_t blockId, idx_t compareSize, size_t sender, vector<MPI_Request>& reqs) {
+            if(compareSize > INT_MAX) {
+                cout << YELLOW << format("WARNING: block {} compare size too big , split into {}", blockId, compareSize / INT_MAX + 1) << RESET << endl;
+                idx_t sizeToSend = compareSize;
+                while(sizeToSend > INT_MAX) {
+                    MPI_Request req;
+                    //TODO 这样不行，Irecv顺序不一样
+                    MPI_Irecv(buffer + compareSize - sizeToSend, INT_MAX, MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &req);
+                    reqs.push_back(req);
+                    sizeToSend -= INT_MAX;
+                }
+                MPI_Irecv(buffer + compareSize - sizeToSend, sizeToSend, MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &reqs[0]);
+            } else {
+                MPI_Irecv(buffer, compareSize, MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &reqs[0]);
+            }
+        }
+        Worker* worker;
     public:
 
-        DistanceBufferPool(const InitInfo& info) {
+        DistanceBufferPool(const InitInfo& info, Worker* worker) : worker(worker) {
             distancesForBlocks = vector<std::unique_ptr<float[]>>(info.blockCount);
+            waitList = queue<Action>();
             try {
                 for (size_t i = 0; i < info.blockCount; i++) {
                     distancesForBlocks[size] = std::make_unique<float[]>(info.presumeBlockDistancesSize);
                     size++;
-                    cout << format("buffer {}", size) << endl;
+                    // cout << format("buffer {}", size) << endl;
                 }
+                cout << YELLOW << format("use Normal Alloc") << RESET << endl;
             } catch (const std::bad_alloc& e) { 
                 useDynamicAlloc = true;
                 blockIds = vector<int>(size, -1);
                 used = vector<bool>(size, false);
+                spareBlock = size;
+                cout << YELLOW << format("use Dynamic Alloc") << RESET << endl;
             }
+            // for (size_t i = 0; i < info.blockCount / 2; i++) {
+            //     distancesForBlocks[size] = std::make_unique<float[]>(info.presumeBlockDistancesSize);
+            //     size++;
+            //     // cout << format("buffer {}", size) << endl;
+            // }
+            // useDynamicAlloc = true;
             cout << format("buffer {}", size) << endl;
         }
         float* getBuffer(size_t blockId) {
@@ -104,33 +147,45 @@ public:
             return nullptr;
         }
 
-        bool IRecv(size_t blockId, size_t compareSize, size_t sender, MPI_Request* req) {
+        bool IRecv(size_t blockId, idx_t compareSize, size_t sender, vector<MPI_Request>& reqs) {
             if(!useDynamicAlloc) {
-                MPI_Irecv(distancesForBlocks[blockId].get(), compareSize, MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, req);
+                IRecvSplit(distancesForBlocks[blockId].get(), blockId, compareSize, sender, reqs);
                 return true;
             } else {
-                for (int i = 0; i < size; i++) {
-                    if(used[i] == false) {
-                        used[i] = true;
-                        blockIds[i] = blockId;
-                        MPI_Irecv(distancesForBlocks[i].get(), compareSize, MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, req);
-                        cout << format("Irecv {}", blockId) << endl;
-                        return true;
+                if(spareBlock <= 0) {
+                    waitList.push(Action(blockId, compareSize, sender));
+                    return false;
+                } else {
+                    for (int i = 0; i < size; i++) {
+                        if(used[i] == false) {
+                            used[i] = true;
+                            blockIds[i] = blockId;
+                            // MPI_Irecv(distancesForBlocks[i].get(), compareSize, MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &reqs[0]);
+                            IRecvSplit(distancesForBlocks[i].get(), blockId, compareSize, sender, reqs);
+                            cout << format("Irecv {}", blockId) << endl;
+                            spareBlock--;
+                            return true;
+                        }
                     }
                 }
-                // cerr << ""
                 return false;
+                // cerr << ""
             }
         }
         bool use(size_t blockId) {
             if(!useDynamicAlloc) {
                 return true;
             } else {
+                if(spareBlock <= 0) {
+                    waitList.push(Action(blockId));
+                    return false;
+                } 
                 for (int i = 0; i < size; i++) {
                     if(used[i] == false) {
                         used[i] = true;
                         blockIds[i] = blockId;
                         cout << format("use {}", blockId) << endl;
+                        spareBlock--;
                         return true;
                     }
                 }
@@ -146,6 +201,16 @@ public:
                         used[i] = false;
                         blockIds[i] = -1;
                         cout << format("release {}", blockId) << endl;
+                        spareBlock++;
+                        if(!waitList.empty()) {
+                            auto action = waitList.front();
+                            if(action.use) {
+                                use(action.blockId);
+                            } else {
+                                IRecv(action.blockId, action.compareSize, action.sender, worker->disRequests[action.blockId]);
+                            }
+                            waitList.pop();
+                        }
                         return true;
                     }
                 }
@@ -164,8 +229,9 @@ public:
 
     //vector的每一个元素对应一个block
     // vector<MPI_Request> infoRequests;
-    vector<MPI_Request> disRequests;
+    vector<vector<MPI_Request>> disRequests;
     vector<MPI_Request> sendRequests;
+    
     // vector<MPI_Status> statuses;
 
     std::unique_ptr<idx_t[]> sendNextWorker; //接受到blockId为i的块的时候，应该发送给rank为sendNextWorker[i]的机器, sendNextWorker[i]=0说明可以发给master
@@ -209,18 +275,21 @@ public:
         this->querys = std::make_unique<float[]>(presumeNq * info.block_dim);
         listidqueries = std::make_unique<idx_t[]>(presumeNq * info.nprobe);  // 最近的nprobe个聚类中心的id
         heapTops = std::make_unique<float[]>(presumeNq);
-        queryCompareSize = std::make_unique<size_t[]>(presumeNq);
-        queryCompareSizePreSum = std::make_unique<size_t[]>(presumeNq + 1);
+        queryCompareSize = std::make_unique<idx_t[]>(presumeNq);
+        queryCompareSizePreSum = std::make_unique<idx_t[]>(presumeNq + 1);
         sendNextWorker = std::make_unique<idx_t[]>(info.blockCount);
         recvPrevWorker = std::make_unique<idx_t[]>(info.blockCount);
 
         // blockSize = presumeNq / info.blockCount;
         // presumeBlockDistancesSize = presumeNq / info.blockCount * info.nb * 2;
         // cout << presumeBlockDistancesSize << "blockD" << endl;
-        distanceBufferPool = std::make_unique<DistanceBufferPool>(info);
+        distanceBufferPool = std::make_unique<DistanceBufferPool>(info, this);
         watch.print(format("node {} distancesForBlocks", rank));
 
-        disRequests = vector<MPI_Request>(info.blockCount);
+        disRequests = vector<vector<MPI_Request>>(info.blockCount);
+        for(int i = 0; i < disRequests.size(); i++) {
+            disRequests[i] = vector<MPI_Request>(1);
+        }
         sendRequests = vector<MPI_Request>(info.blockCount);
 
         //初始化sendNextWorker, recvPrevWorker
@@ -231,7 +300,7 @@ public:
 
         MPI_Barrier(MPI_COMM_WORLD); //对应preSearch最后的barrier
 
-        uniWatch = MyStopWatch(true, "uniWatch", MAG);
+        uniWatch = MyStopWatch(false, "uniWatch", MAG);
         uniWatch.print(format("node {} cross barrier", rank), false);
 
         // nq, querys
@@ -254,7 +323,6 @@ public:
         uniWatch.print(format("node {} listidqueries", rank), false);
 
         // queryCompareSize,queryCompareSizePreSum
-        queryCompareSize = std::make_unique<size_t[]>(nq);
         MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
         // queryCompareSizePreSum = std::make_unique<size_t[]>(nq + 1);
         MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
@@ -298,13 +366,13 @@ public:
                 distanceBufferPool->use(blockId);
             }
         }
-         for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
+        for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
             if(recvPrevWorker[blockId] != 0) {
                 size_t sender = recvPrevWorker[blockId];
                 // tag 当做blockId
                 // MPI_Irecv(distancesForBlocks[blockId].get(), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
                 // MPI_Irecv(distanceBufferPool->getBuffer(blockId), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
-                bool suc = distanceBufferPool->IRecv(blockId, getTotalQueryCompareSize(blockId), sender, &disRequests[blockId]);
+                bool suc = distanceBufferPool->IRecv(blockId, getTotalQueryCompareSize(blockId), sender, disRequests[blockId]);
                 if(!suc) {
                     break;
                 }
@@ -327,46 +395,47 @@ public:
             } else {
                 int isReceived;
                 MPI_Status stat;
-                MPI_Test(&disRequests[blockId], &isReceived, &stat);
-                if(isReceived) {
+                bool testFail = false;
+                for(auto& req : disRequests[blockId]) {
+                    MPI_Test(&req, &isReceived, &stat);
+                    if(!isReceived) {
+                        testFail = true;
+                        break;
+                    }
+                }
+                if(!testFail) {
                     // cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
                     watch.print(format("node {} wait", rank));
-                    // searchBlock(blockId, cut);
                     searchBlock(blockId, cut);
                     watch.reset();
                     searchedBlockCount++;
                     isBlockSearched[blockId] = true;
-                } else {
-                    // cout << format("node({}) not receving block({})",rank, blockId) << endl;
                 }
             }
         }
         totalWatch.print(format("Search Finished node({}), total skip:{:.1f}%", rank, (double)totalSkip / totalCompare * 100));
 
-
-        for(int i = 0; i < sendRequests.size(); i++) {
-            MPI_Wait(&sendRequests[i], MPI_STATUS_IGNORE);
-        }
+        MPI_Waitall(sendRequests.size(), sendRequests.data(), MPI_STATUS_IGNORE);
 
     }
-    size_t getTotalQueryCompareSize(size_t blockId) {
+    idx_t getTotalQueryCompareSize(size_t blockId) {
         size_t queryStart = blockId * blockSize;
-        size_t totalQueryCompareSize = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
-        if((double)queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart] > INT_MAX) {
-            cerr << RED << "increase block size" << RESET << endl;
-            throw std::invalid_argument("increase block size");
-        }
+        idx_t totalQueryCompareSize = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
+        // if((double)queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart] > INT_MAX) {
+        //     cerr << RED << "increase block size" << RESET << endl;
+        //     throw std::invalid_argument("increase block size");
+        // }
         return totalQueryCompareSize;
     }
     idx_t totalSkip = 0;
     idx_t totalCompare = 0;
     void searchBlock(size_t blockId, bool cut) {
-        MyStopWatch searchWatch(true);
+        MyStopWatch searchWatch(false);
 
         float* distanceBuffer = distanceBufferPool->getBuffer(blockId);
 
         size_t queryStart = blockId * blockSize;
-        size_t totalQueryCompareSize = getTotalQueryCompareSize(blockId);
+        idx_t totalQueryCompareSize = getTotalQueryCompareSize(blockId);
             
         // cout << RED << rank << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
         //      << endl;
@@ -426,15 +495,26 @@ public:
 
         uniWatch.print(format("ready to perform node({}) -> block({}) -> node({})", rank, blockId, sendNextWorker[blockId]), false);
         MyStopWatch watch(false);
-        MPI_Isend(distanceBuffer, totalQueryCompareSize, MPI_FLOAT, sendNextWorker[blockId], blockId,
-                 MPI_COMM_WORLD, &sendRequests[blockId]);
+        if(totalQueryCompareSize > INT_MAX) {
+            cout << "> INT_MAX" << endl;
+            idx_t sizeToSend = totalQueryCompareSize;
+            while(sizeToSend > INT_MAX) {
+                MPI_Request request;
+                MPI_Isend(distanceBuffer + totalQueryCompareSize - sizeToSend, INT_MAX, MPI_FLOAT, sendNextWorker[blockId], blockId, MPI_COMM_WORLD, &request);
+                sendRequests.push_back(request);
+                sizeToSend -= INT_MAX;
+            }
+            MPI_Isend(distanceBuffer + totalQueryCompareSize - sizeToSend, sizeToSend, MPI_FLOAT, sendNextWorker[blockId], blockId, MPI_COMM_WORLD, &sendRequests[blockId]);
+        } else {
+            MPI_Isend(distanceBuffer, totalQueryCompareSize, MPI_FLOAT, sendNextWorker[blockId], blockId, MPI_COMM_WORLD, &sendRequests[blockId]);
+        }
 
         watch.print(format("node({}) -> block({}) -> node({}) 传输时间", rank, blockId, sendNextWorker[blockId]));
 
         totalSkip += skip;
         totalCompare += totalQueryCompareSize;
 
-        distanceBufferPool->releaseBuffer(blockId);
+        // distanceBufferPool->releaseBuffer(blockId); 不能直接release, 要检查buffer是不是已经发送完毕了
 
         searchWatch.print(format("node({}) search block({}) skip:{:.1f}%", rank, blockId, (double)skip / totalQueryCompareSize * 100));
     }
@@ -575,8 +655,6 @@ public:
     
     
     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
-        // std::cout << BLUE << "simple version of search" << RESET;
-        //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
 
         std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k)); 
 
@@ -613,6 +691,50 @@ public:
             idxi += k;
             // w.print(format("q {}", i));
         }
+
+
+        // std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k)); 
+
+        // //下面四个向量都和i绑定，也就是和每一个查询绑定
+        // float* disi = distances; //结果，查询向量最近的k个向量的距离
+        // idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
+        // idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
+
+        // for (size_t i = 0; i < n; i++) {
+        //     //每一个i对应一个查询
+        //     scaner->set_query(queries + i * d);
+        //     //获取最近的nprobe个聚类中心
+        //     for (size_t j = 0; j < nprobe; j++) {
+        //         //在第j个聚类中搜索所有点
+        //         //list代表聚类
+        //         // IVF& list = lists[listids[j]];
+        //         idx_t ivfId = listids[j];
+        //         idx_t index = ivfId - info.startIVFId;
+        //         size_t listSize = listSizes[index];
+        //         float* codes = listCodes[index].get();
+        //         size_t* ids = listIds[index].get();
+
+        //         //查询点到中心的距离
+        //         float centroid2query = centroids2query[j];
+        //         //聚类中的点的数量
+        //         size_t list_size = list.get_list_size();
+
+        //         size_t scan_begin = 0;
+        //         size_t scan_end = list_size;
+
+        //         scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
+        //                         list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
+        //                         list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
+        //                         list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(),
+        //                         list.get_sub_farest_IP_dis(), list.get_sub_nearest_L2_id(),
+        //                         list.get_sub_nearest_L2_dis(), nullptr, disi, idxi, stats,
+        //                         centroid_codes.get() + listids[j] * d);
+        //     }
+        //     sort_result(METRIC_L2, k, disi, idxi);
+        //     disi += k;
+        //     idxi += k;
+        //     listids += nprobe;
+        // }
     }
 
     void search() {
