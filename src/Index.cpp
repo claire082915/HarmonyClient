@@ -1191,7 +1191,6 @@ float ratio, Stats* stats) {
         //要查的聚类id存储在listids的前nprobe个
         sort_result(metric, nprobe, centroids2query, listids);
 
-        cout << metric << nprobe << endl;
         if (metric == MetricType::METRIC_L2) {
             for (size_t j = 0; j < nprobe; j++) {
                 //在第j个聚类中搜索所有点
@@ -1206,22 +1205,22 @@ float ratio, Stats* stats) {
                 size_t scan_begin = 0;
                 size_t scan_end = list_size;
 
-                cout << i <<  " " << list_size;
-                printVector(list.get_candidate_codes(), list_size * d, BLUE);
-                printVector(list.get_candidate_id(), list_size, MAG);
-                printVector(scaner->query, d, GREEN);
-                scaner->lite_scan_codes(list_size,
-                                          list.get_candidate_codes(),
-                                          list.get_candidate_id(),
-                                          disi, //ret
-                                          idxi); //ret , 分别对应堆
-                // scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
-                //                    list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
-                //                    list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
-                //                    list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(),
-                //                    list.get_sub_farest_IP_dis(), list.get_sub_nearest_L2_id(),
-                //                    list.get_sub_nearest_L2_dis(), nullptr, disi, idxi, stats,
-                //                    centroid_codes.get() + listids[j] * d);
+                // cout << i <<  " " << list_size;
+                // printVector(list.get_candidate_codes(), list_size * d, BLUE);
+                // printVector(list.get_candidate_id(), list_size, MAG);
+                // printVector(scaner->query, d, GREEN);
+                // scaner->lite_scan_codes(list_size,
+                //                           list.get_candidate_codes(),
+                //                           list.get_candidate_id(),
+                //                           disi, //ret
+                //                           idxi); //ret , 分别对应堆
+                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
+                                   list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
+                                   list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
+                                   list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(),
+                                   list.get_sub_farest_IP_dis(), list.get_sub_nearest_L2_id(),
+                                   list.get_sub_nearest_L2_dis(), nullptr, disi, idxi, stats,
+                                   centroid_codes.get() + listids[j] * d);
             }
         }
         sort_result(metric, k, disi, idxi);
@@ -1234,7 +1233,6 @@ float ratio, Stats* stats) {
 void Index::single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
                                  Stats* stats) {
     // n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
-    cout << "sts" << endl;
     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe);  // 搜索最近的聚类中心
     std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k);                // 在聚类中心内部搜
 
@@ -1402,8 +1400,9 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     std::vector<Stats> stats(nt);
 
     cout << YELLOW << "original version of search" << endl;
+
     // 把n个查询交给多线程
-#pragma omp parallel for num_threads(1)
+#pragma omp parallel for num_threads(nt)
     for (size_t i = 0; i < nt; i++) {
         // cout << " orint = " << omp_get_num_threads() << endl;
         size_t start, end;
@@ -1417,11 +1416,11 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
         if (start < end) {
             // end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k
             // 是结果存放的起始位置
-            // single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
-            //                      &stats[i]);
-            
-            single_thread_search_simple(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
+            single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
                                  &stats[i]);
+            
+            // single_thread_search_simple(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
+            //                      &stats[i]);
         }
     }
 

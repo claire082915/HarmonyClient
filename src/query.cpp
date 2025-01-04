@@ -591,7 +591,6 @@ int main(int argc, char* argv[]) {
                         }
 
                         if (param.mode != Index::SearchMode::ORIGINAL) {
-                            cout << "haaha" << endl;
                             Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
                             // stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
                             // cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
@@ -617,6 +616,7 @@ int main(int argc, char* argv[]) {
             }
         } else {
             MPI_Barrier(MPI_COMM_WORLD);
+            index.nprobe = nprobes[0];
             workerMain(rank, cut, divideIVF, &index);
         }
     MPI_Finalize();
