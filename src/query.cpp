@@ -25,13 +25,13 @@ bool str_lower_equal(const std::string& a, const std::string& b) {
 
 
 
-int workerMain(int rank, bool cut, bool divideIVF) {
+int workerMain(int rank, bool cut, bool divideIVF, Index* index) {
     // cout << "node(" << rank << ") main()" << endl;
     // MPI_Bcast(data.data(), array_size, MPI_INT, 0, MPI_COMM_WORLD);
     
     if(divideIVF) {
         BaseWorker worker; 
-        worker.init(rank);
+        worker.init(rank, index);
         worker.search();
     } else {
         Worker node;
@@ -145,13 +145,13 @@ int main(int argc, char* argv[]) {
     bool cut = program.get<bool>("cut");
     bool run_faiss = program.get<bool>("run_faiss");
 
-    if (rank != 0) {
-        if(!run_faiss) {
-            MPI_Barrier(MPI_COMM_WORLD);
-            workerMain(rank, cut, divideIVF);
-        }
-    } else {
-        cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
+    // if (rank != 0) {
+    //     if(!run_faiss) {
+    //         MPI_Barrier(MPI_COMM_WORLD);
+    //         workerMain(rank, cut, divideIVF);
+    //     }
+    // } else {
+        // cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
         
         std::vector<size_t> nprobes = program.get<std::vector<size_t>>("nprobes");
         std::vector<std::string> opt_levels_str = program.get<std::vector<std::string>>("opt_levels");
@@ -520,101 +520,105 @@ int main(int argc, char* argv[]) {
         }
 
         
-
-        auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, float* distances, idx_t* labels, Index::Param param) -> Stats {
-           
-            index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param);
-            if (loop > 1) {
-                index.search(nq, query.get(), k, distances, labels, ratio, &param);
-            }
-            Stopwatch stopwatch;
-            Stats stats;
-            for (size_t j = 0; j < loop; j++) {
-                stats = index.search(nq, query.get(), k, distances, labels, ratio, &param);
-            }
+        if(rank == 0) {
+            auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, float* distances, idx_t* labels, Index::Param param) -> Stats {
             
-            double search_time = stopwatch.elapsedSeconds() / loop;
+                index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param);
+                if (loop > 1) {
+                    index.search(nq, query.get(), k, distances, labels, ratio, &param);
+                }
+                Stopwatch stopwatch;
+                Stats stats;
+                for (size_t j = 0; j < loop; j++) {
+                    stats = index.search(nq, query.get(), k, distances, labels, ratio, &param);
+                }
+                
+                double search_time = stopwatch.elapsedSeconds() / loop;
 
-            float recall = calculate_recall(labels, distances, ground_truth_I.get(), ground_truth_D.get(),
-                                            nq, k, metric);
-            float r2 =
-                calculate_r2(labels, distances, ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
-            stats.simi_ratio = ratio;
-            stats.nlist = nlist;
-            stats.nprobe = nprobe;
-            stats.query_time = search_time;
-            stats.faiss_query_time = f_time;
-            stats.opt_level = opt_level;
-            stats.recall = recall;
-            stats.r2 = r2;
-            stats.block = blockCount;
-            stats.worker = workerCount;
-            stats.disableOrderOptimize = disableOrderOptimize;
-            stats.divideIVF = divideIVF;
-            stats.cut = cut;
-            
-            if (recall == 1) {
-                early_stop_flag = true;
-            }
-            return stats;
-        };
-        // search with different nprobe ,Opt level ,ratio
-        for (size_t i = 0; i < nprobes.size(); i++) {
-            size_t nprobe = nprobes[i];
-            double f_time = faiss_time[i];
-            index.nprobe = nprobe;
-            bool early_stop_flag = false;
-            for (const OptLevel& opt_level : opt_levels) {
-                index.opt_level = opt_level;
-                for (float ratio : ratios) {
-                    std::unique_ptr<float[]> distancesB = std::make_unique<float[]>(nq * k);
-                    std::unique_ptr<idx_t[]> labelsB = std::make_unique<idx_t[]>(nq * k);
-                    std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
-                    std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
-                    // else {
-                    Index::Param oriParam;
-                    oriParam.mode = Index::SearchMode::ORIGINAL;
-                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
-                    oriStat.print();
-                    MPI_Barrier(MPI_COMM_WORLD);
+                float recall = calculate_recall(labels, distances, ground_truth_I.get(), ground_truth_D.get(),
+                                                nq, k, metric);
+                float r2 =
+                    calculate_r2(labels, distances, ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
+                stats.simi_ratio = ratio;
+                stats.nlist = nlist;
+                stats.nprobe = nprobe;
+                stats.query_time = search_time;
+                stats.faiss_query_time = f_time;
+                stats.opt_level = opt_level;
+                stats.recall = recall;
+                stats.r2 = r2;
+                stats.block = blockCount;
+                stats.worker = workerCount;
+                stats.disableOrderOptimize = disableOrderOptimize;
+                stats.divideIVF = divideIVF;
+                stats.cut = cut;
+                
+                if (recall == 1) {
+                    early_stop_flag = true;
+                }
+                return stats;
+            };
+            // search with different nprobe ,Opt level ,ratio
+            for (size_t i = 0; i < nprobes.size(); i++) {
+                size_t nprobe = nprobes[i];
+                double f_time = faiss_time[i];
+                index.nprobe = nprobe;
+                bool early_stop_flag = false;
+                for (const OptLevel& opt_level : opt_levels) {
+                    index.opt_level = opt_level;
+                    for (float ratio : ratios) {
+                        std::unique_ptr<float[]> distancesB = std::make_unique<float[]>(nq * k);
+                        std::unique_ptr<idx_t[]> labelsB = std::make_unique<idx_t[]>(nq * k);
+                        std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
+                        std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
+                        // else {
+                        Index::Param oriParam;
+                        oriParam.mode = Index::SearchMode::ORIGINAL;
+                        // Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
+                        // oriStat.print();
+                        MPI_Barrier(MPI_COMM_WORLD);
 
-                    std::cout << YELLOW;
+                        std::cout << YELLOW;
 
-                    Index::Param param;
-                    param.orderOptimize = !disableOrderOptimize;
-                    if(divideIVF) {
-                        param.mode = Index::SearchMode::DIVIDE_IVF;
-                    } else if (block_version) {
-                        param.mode = Index::SearchMode::DIVIDE_DIM;
-                    } else {
-                        param.mode = Index::SearchMode::ORIGINAL;
+                        Index::Param param;
+                        param.orderOptimize = !disableOrderOptimize;
+                        if(divideIVF) {
+                            param.mode = Index::SearchMode::DIVIDE_IVF;
+                        } else if (block_version) {
+                            param.mode = Index::SearchMode::DIVIDE_DIM;
+                        } else {
+                            param.mode = Index::SearchMode::ORIGINAL;
+                        }
+
+                        if (param.mode != Index::SearchMode::ORIGINAL) {
+                            cout << "haaha" << endl;
+                            Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
+                            // stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
+                            // cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
+                            stat.print();
+                            stat.myToCsv(log_path, true, dataset);
+                        } 
+                        // for(int i = 0; i < 3; i++) {
+                        //     // if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                        //         std::cout << "Q" << i << " " << std::endl;
+                        //         printVector(distances.get() + i * k, k, BLUE);
+                        //         printVector(distancesB.get() + i * k, k, BLUE);
+                        //         printVector(labels.get() + i * k, k, BLUE);
+                        //         printVector(labelsB.get() + i * k, k, BLUE);
+                        //     // }
+                        // }
+                        std::cout << RESET;
+                        // }
                     }
-
-                    if (param.mode != Index::SearchMode::ORIGINAL) {
-                        Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
-                        // stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
-                        // cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
-                        stat.print();
-                        stat.myToCsv(log_path, true, dataset);
-                    } 
-                    // for(int i = 0; i < nq; i++) {
-                    //     if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
-                    //         std::cout << "Q" << i << " " << std::endl;
-                    //         printVector(distances.get() + i * k, k, BLUE);
-                    //         printVector(distancesB.get() + i * k, k, BLUE);
-                    //         printVector(labels.get() + i * k, k, BLUE);
-                    //         printVector(labelsB.get() + i * k, k, BLUE);
-                    //     }
-                    // }
-                    std::cout << RESET;
-                    // }
+                }
+                if (early_stop_flag) {
+                    break;
                 }
             }
-            if (early_stop_flag) {
-                break;
-            }
+        } else {
+            MPI_Barrier(MPI_COMM_WORLD);
+            workerMain(rank, cut, divideIVF, &index);
         }
-    }
     MPI_Finalize();
     cout << CRAN << "return worker:" << rank << RESET << endl;
     return 0;

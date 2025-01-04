@@ -12,8 +12,10 @@
 #include "utils.h"
 #include "heap.hpp"
 #include "IVFScan.hpp"
+
 namespace tribase {
 
+class Index;
 
 using namespace std;
 class Worker {
@@ -572,10 +574,13 @@ public:
 
     MyStopWatch uniWatch;
 
-    void init(int rank) {
+    Index* index;
+
+    void init(int rank, tribase::Index* index) {
         MyStopWatch watch(true);
 
         this->rank = rank;
+        this->index = index;
 
         // 1.InitInfo
         MPI_Recv(&info, sizeof(InitInfo), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -737,72 +742,73 @@ public:
         // }
     }
 
-    void search() {
-        uniWatch.print(format("node {} start search", rank), false);
+    void search();
+//     void search() {
+//         uniWatch.print(format("node {} start search", rank), false);
 
-        size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), nq);
-        size_t batch_size = nq / nt;
-        size_t extra = nq % nt;
-        cout << nt << endl;
-#pragma omp parallel for num_threads(nt)
-        for (size_t i = 0; i < nt; i++) {
-            size_t start, end;
-            if (i < extra) {
-                start = i * (batch_size + 1);
-                end = start + batch_size + 1;
-            } else {
-                start = i * batch_size + extra;
-                end = start + batch_size;
-            }
-            if (start < end) {
-                // end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k
-                // 是结果存放的起始位置
+//         size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), nq);
+//         size_t batch_size = nq / nt;
+//         size_t extra = nq % nt;
+//         cout << nt << endl;
+// #pragma omp parallel for num_threads(nt)
+//         for (size_t i = 0; i < nt; i++) {
+//             size_t start, end;
+//             if (i < extra) {
+//                 start = i * (batch_size + 1);
+//                 end = start + batch_size + 1;
+//             } else {
+//                 start = i * batch_size + extra;
+//                 end = start + batch_size;
+//             }
+//             if (start < end) {
+//                 // end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k
+//                 // 是结果存放的起始位置
 
-                // cout << format("thread {} {}", omp_get_thread_num(), start) << endl;
-                MyStopWatch w;
-                single_thread_search_simple(end - start, querys.get() + start * info.d, k, distances.get() + start * k, labels.get() + start * k);
-                // w.print(format("single thread {}", i));
-            }
-        }
-// #pragma omp parallel for schedule(dynamic)
-//         for(size_t q = 0; q < nq; q++) {
-//             // size_t nt = omp_get_num_threads();
-//             // cout << nt << endl;
-//             // auto scaner = scaners[omp_get_thread_num()].get();
-//             // scaner->set_query(querys.get() + q * info.d);
-//             // float* simi = distances.get() + q * k;
-//             // idx_t* idxi = labels.get() + q * k;
-//             // float* query = querys.get() + q * info.d;
-//             for (size_t i = 0; i < info.nprobe; i++) {
-//                 idx_t ivfId = listidqueries[q * info.nprobe + i];
-//                 // if(!(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount)) {
-//                 //     continue;
-//                 // }
-//                 idx_t index = ivfId - info.startIVFId;
-//                 size_t listSize = listSizes[index];
-//                 // float* codes = listCodes[index].get();
-//                 // size_t* ids = listIds[index].get();
-//                 // scaner->lite_scan_codes(listSize, codes, ids, distances.get() + q * k, labels.get() + q * k);
-//                 for (size_t j = 0; j < listSize; j++) {
-//                     //和每一个待比较向量进行比较，每一个i和一个待比较向量绑定
-//                     // const float* candicate = codes + j * info.d;
-//                     // float dis = calculatedEuclideanDistance(query, candicate, info.d);
-//                     // if (dis < simi[0]) {
-//                     //     //比堆顶
-//                     //     heap_replace_top<METRIC_L2>(k, simi, idxi, dis, ids[j]);
-//                     //     // simi[0] = dis;
-//                     // }
-//                         //比堆顶
-//                     heap_replace_top<METRIC_L2>(k, distances.get(), labels.get(), 0, 0);
-//                         // simi[0] = dis;
-//                 }
+//                 // cout << format("thread {} {}", omp_get_thread_num(), start) << endl;
+//                 MyStopWatch w;
+//                 single_thread_search_simple(end - start, querys.get() + start * info.d, k, distances.get() + start * k, labels.get() + start * k);
+//                 // w.print(format("single thread {}", i));
 //             }
 //         }
-        uniWatch.print(format("node {} search", rank), false);
-        MPI_Send(distances.get(), k * nq, MPI_FLOAT, 0, 0, MPI_COMM_WORLD); 
-        MPI_Send(labels.get(), k * nq, MPI_INT64_T, 0, 0, MPI_COMM_WORLD); 
-        uniWatch.print(format("node {} send", rank), false);
-    }
+// // #pragma omp parallel for schedule(dynamic)
+// //         for(size_t q = 0; q < nq; q++) {
+// //             // size_t nt = omp_get_num_threads();
+// //             // cout << nt << endl;
+// //             // auto scaner = scaners[omp_get_thread_num()].get();
+// //             // scaner->set_query(querys.get() + q * info.d);
+// //             // float* simi = distances.get() + q * k;
+// //             // idx_t* idxi = labels.get() + q * k;
+// //             // float* query = querys.get() + q * info.d;
+// //             for (size_t i = 0; i < info.nprobe; i++) {
+// //                 idx_t ivfId = listidqueries[q * info.nprobe + i];
+// //                 // if(!(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount)) {
+// //                 //     continue;
+// //                 // }
+// //                 idx_t index = ivfId - info.startIVFId;
+// //                 size_t listSize = listSizes[index];
+// //                 // float* codes = listCodes[index].get();
+// //                 // size_t* ids = listIds[index].get();
+// //                 // scaner->lite_scan_codes(listSize, codes, ids, distances.get() + q * k, labels.get() + q * k);
+// //                 for (size_t j = 0; j < listSize; j++) {
+// //                     //和每一个待比较向量进行比较，每一个i和一个待比较向量绑定
+// //                     // const float* candicate = codes + j * info.d;
+// //                     // float dis = calculatedEuclideanDistance(query, candicate, info.d);
+// //                     // if (dis < simi[0]) {
+// //                     //     //比堆顶
+// //                     //     heap_replace_top<METRIC_L2>(k, simi, idxi, dis, ids[j]);
+// //                     //     // simi[0] = dis;
+// //                     // }
+// //                         //比堆顶
+// //                     heap_replace_top<METRIC_L2>(k, distances.get(), labels.get(), 0, 0);
+// //                         // simi[0] = dis;
+// //                 }
+// //             }
+// //         }
+//         uniWatch.print(format("node {} search", rank), false);
+//         MPI_Send(distances.get(), k * nq, MPI_FLOAT, 0, 0, MPI_COMM_WORLD); 
+//         MPI_Send(labels.get(), k * nq, MPI_INT64_T, 0, 0, MPI_COMM_WORLD); 
+//         uniWatch.print(format("node {} send", rank), false);
+//     }
     
 };
 }  // namespace tribase
