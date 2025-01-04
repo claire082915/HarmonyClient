@@ -36,11 +36,15 @@ class Index {
     struct Param {
         bool orderOptimize = true;
         SearchMode mode;
+        bool divideIVFVersionOriginal = false;
+        size_t startIVFId = 0, ivfCount = 0;
     };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
     void single_thread_nearest_cluster_search(size_t n, const float* queries, float* distances, idx_t* labels);
     void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
+    void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
+                                 Stats* stats, size_t startIVF, size_t ivfCount);
     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
     void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);

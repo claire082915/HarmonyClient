@@ -86,6 +86,8 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
                 labelsHeapBuffer[rank] = std::make_unique<idx_t[]>(presumeK * presumeNq);
             }
         }
+        MPI_Bcast(centroid_codes.get(), nlist * d, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(centroid_ids.get(), nlist , MPI_INT64_T, 0, MPI_COMM_WORLD);
 
     } else {
         MyStopWatch watch(true);
@@ -1366,6 +1368,146 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
     }
 }
 
+void Index::single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
+                                 Stats* stats, size_t startIVF, size_t ivfCount) {
+    // n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
+    std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe);  // 搜索最近的聚类中心
+    std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k);                // 在聚类中心内部搜
+
+    std::unique_ptr<float[]> centroid2queries =
+        std::make_unique<float[]>(n * nprobe);  // n个查询向量到nprobe个聚类中心的距离
+    std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe);  // 最近的nprobe个聚类中心的id
+    init_result(metric, n * nprobe, centroid2queries.get(),
+                listidqueries.get());  // 优先队列，存储离n个查询向量最近的nprobe个聚类中心
+
+    // 下面四个向量都和i绑定，也就是和每一个查询绑定
+    float* simi = distances;
+    idx_t* idxi = labels;
+    float* centroids2query = centroid2queries.get();  // 单个查询对应的距离
+    idx_t* listids = listidqueries.get();             // 单个查询对应的IVF聚类中心id
+
+    for (size_t i = 0; i < n; i++) {
+        // 每一个i对应一个查询
+        scaner_quantizer->set_query(queries + i * d);
+        scaner->set_query(queries + i * d);
+        // 把和nlist个聚类中心计算距离的结果放进centroids2query这个堆里面
+        scaner_quantizer->lite_scan_codes(nlist, centroid_codes.get(),
+                                          reinterpret_cast<const size_t*>(centroid_ids.get()),
+                                          centroids2query,  // ret
+                                          listids);         // ret , 分别对应两个堆
+        // 取前nprobe个聚类中心
+        sort_result(metric, nprobe, centroids2query, listids);
+
+        if (metric == MetricType::METRIC_L2) {
+            for (size_t j = 0; j < nprobe; j++) {
+                // 在第j个聚类中搜索所有点
+                // list代表聚类
+                idx_t ivfId = listids[j];
+                if(!(ivfId >= startIVF && ivfId < startIVF + ivfCount)) {
+                    continue;
+                }
+                IVF& list = lists[listids[j] - startIVF];
+
+                // 查询点到中心的距离
+                float centroid2query = centroids2query[j];
+                // 聚类中的点的数量
+                size_t list_size = list.get_list_size();
+
+                std::unique_ptr<bool[]> if_skip = std::make_unique<bool[]>(list_size);
+
+                size_t skip_count = 0;
+                size_t skip_count_large = 0;
+                size_t scan_begin = 0;
+                size_t scan_end = list_size;
+
+                // if (opt_level & OptLevel::OPT_TRIANGLE) {
+                //     const float* sqrt_candidate2centroid = list.get_sqrt_candidate2centroid();
+                //     const float* candidate2centroid = list.get_candidate2centroid();
+                //     float sqrt_simi = ratio * sqrt(simi[0]);  // TODO:
+                //     float sqrt_centroid2query = sqrt(centroid2query);
+                //     for (size_t ii = 0; ii < list_size; ii++) {
+                //         float tmp = sqrt_simi + sqrt_candidate2centroid[ii];
+                //         if (tmp < sqrt_centroid2query) {
+                //             skip_count++;
+                //         } else {
+                //             break;
+                //         }
+                //     }
+
+                //     for (int64_t ii = list_size - 1; ii >= 0; ii--) {
+                //         float tmp_large = sqrt_simi + sqrt_centroid2query;
+                //         tmp_large *= tmp_large;
+                //         if (tmp_large < candidate2centroid[ii]) {
+                //             skip_count_large++;
+                //         } else {
+                //             break;
+                //         }
+                //     }
+                //     scan_begin = skip_count;
+                //     scan_end -= skip_count_large;
+                // }
+
+                IF_STATS {
+                    stats->skip_triangle_count += skip_count;
+                    stats->skip_triangle_large_count += skip_count_large;
+                    stats->total_count += list_size;
+                }
+
+                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
+                                   list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
+                                   list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
+                                   list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(),
+                                   list.get_sub_farest_IP_dis(), list.get_sub_nearest_L2_id(),
+                                   list.get_sub_nearest_L2_dis(), if_skip.get(), simi, idxi, stats,
+                                   centroid_codes.get() + listids[j] * d);
+            }
+        } else {
+            for (size_t j = 0; j < nprobe; j++) {
+                IVF& list = lists[listids[j]];
+                const float* candidate2centroid = list.get_candidate2centroid();
+                float centroid2query = centroids2query[j];
+                float s_centroid2query = sqrt(1 - centroid2query * centroid2query);
+                float s_simi = sqrt(1 - simi[0] * simi[0]);
+                size_t list_size = list.get_list_size();
+                size_t scan_begin = 0;
+                size_t scan_end = list_size;
+                if (opt_level & OptLevel::OPT_TRIANGLE) {
+                    float min_cut_degree_cos;
+                    float max_cut_degree_cos;
+                    if (simi[0] < centroid2query) {  // 0 ~ c + s
+                        max_cut_degree_cos = 1;
+                        min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
+                        while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
+                            scan_end--;
+                        }
+                    } else {  // c - s ~ c + s
+                        max_cut_degree_cos = simi[0] * centroid2query + s_simi * s_centroid2query;
+                        min_cut_degree_cos = simi[0] * centroid2query - s_simi * s_centroid2query;
+                        while (scan_begin < scan_end && candidate2centroid[scan_begin] > max_cut_degree_cos) {
+                            scan_begin++;
+                        }
+                        while (scan_begin < scan_end && candidate2centroid[scan_end - 1] < min_cut_degree_cos) {
+                            scan_end--;
+                        }
+                    }
+                    IF_STATS {
+                        stats->skip_triangle_count += scan_begin + list_size - scan_end;
+                        stats->total_count += list_size;
+                    }
+                }
+                scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
+                                   simi, idxi);
+            }
+        }
+        sort_result(metric, k, simi, idxi);
+
+        simi += k;
+        idxi += k;
+        centroids2query += nprobe;
+        listids += nprobe;
+    }
+}
+
 Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
                     Param* param) {
     if (n == 0) {
@@ -1416,9 +1558,15 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
         if (start < end) {
             // end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k
             // 是结果存放的起始位置
-            single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
+            if(param->divideIVFVersionOriginal) {
+                single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
+                                 &stats[i], param->startIVFId, param->ivfCount);
+
+            } else {
+
+                single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
                                  &stats[i]);
-            
+            }
             // single_thread_search_simple(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
             //                      &stats[i]);
         }

@@ -1,7 +1,7 @@
 #ifndef NODE_H
 #define NODE_H
 #include <mpi.h>
-
+#include <numeric>
 #include <algorithm>
 #include <cstdlib>
 #include <memory>
@@ -561,8 +561,8 @@ public:
     size_t nq = 0;
     size_t k = 0;
     std::unique_ptr<size_t[]> listSizes;         // nlist个聚类的向量数
-    vector<std::unique_ptr<float[]>> listCodes;  // nlist个聚类的向量数
-    vector<std::unique_ptr<size_t[]>> listIds;  // nlist个聚类的向量数
+    // vector<std::unique_ptr<float[]>> listCodes;  // nlist个聚类的向量数
+    // vector<std::unique_ptr<size_t[]>> listIds;  // nlist个聚类的向量数
     std::unique_ptr<float[]> querys;             // nq个查询向量, 维度是block_dim
     std::unique_ptr<idx_t[]> listidqueries;      // nq * nprobe 查询向量相近的聚类id
     // std::unique_ptr<size_t[]> queryCompareSize;  
@@ -574,173 +574,95 @@ public:
 
     MyStopWatch uniWatch;
 
-    Index* index;
+    std::unique_ptr<Index> index;
+    // Index* index;
 
-    void init(int rank, tribase::Index* index) {
-        MyStopWatch watch(true);
-
-        this->rank = rank;
-        this->index = index;
-
-        // 1.InitInfo
-        MPI_Recv(&info, sizeof(InitInfo), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        info.print();
-        // IVF的ID通过startIVFid给出, 顺序排列
-
-        // 2.IVF的大小，IVF的向量表示
-        listSizes = std::make_unique<size_t[]>(info.ivfCount);
-        MPI_Recv(listSizes.get(), info.ivfCount * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-        size_t totalNb = 0;
-        for(int i = 0; i < info.ivfCount; i++) {
-            totalNb += listSizes[i];
-        }
-
-        listCodes = vector<std::unique_ptr<float[]>>(info.ivfCount); //每个聚类对应的codes
-        listIds = vector<std::unique_ptr<size_t[]>>(info.ivfCount); //每个聚类对应的ids
-        
-        // auto curCodes = listCodes.get();
-        // auto curIds = listIds.get();
-        for (size_t i = 0; i < info.ivfCount; i++) {
-            listCodes[i] = std::make_unique<float[]>(listSizes[i] * info.d);
-            listIds[i] = std::make_unique<size_t[]>(listSizes[i]);
-            MPI_Recv(listCodes[i].get(), listSizes[i] * info.d , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            MPI_Recv(listIds[i].get(), listSizes[i] * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // MPI_Recv(curCodes, listSizes[i] * info.d , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // MPI_Recv(curIds, listSizes[i] * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // curCodes += listSizes[i] * info.d;
-            // curIds += listSizes[i];
-        }
-        watch.print("listCodes and listIds");
-
-        //提前malloc
-        int presumeNq = 10000;
-        int presumeK = 1000;
-        this->querys = std::make_unique<float[]>(presumeNq * info.d);
-        listidqueries = std::make_unique<idx_t[]>(presumeNq * info.nprobe);  // 最近的nprobe个聚类中心的id
-        // queryCompareSize = std::make_unique<size_t[]>(presumeNq);
-        // queryCompareSizePreSum = std::make_unique<size_t[]>(presumeNq + 1);
-
-        distances = std::make_unique<float[]>(presumeNq * presumeK);
-        labels = std::make_unique<idx_t[]>(presumeNq * presumeK);
-        init_result(METRIC_L2, presumeNq * presumeK, distances.get(), labels.get());
-
-        MPI_Barrier(MPI_COMM_WORLD); //对应preSearch最后的barrier
-
-        uniWatch = MyStopWatch(true, "uniWatch", MAG);
-        uniWatch.print(format("node {} cross barrier", rank), false);
-
-        // nq, k, querys
-        MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&k, sizeof(k), MPI_BYTE, 0, MPI_COMM_WORLD);
-        if(nq * k > presumeK * presumeNq) {
-            cerr << "presumeNq is too small" << endl;
-            exit(1);
-        }
-        uniWatch.print(format("node {} nq", rank), false);
-        MPI_Bcast(querys.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
-        uniWatch.print(format("node {} querys", rank), false);
-
-        // query最近的nprobe个聚类中心的id
-        MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
-        uniWatch.print(format("node {} listidqueries", rank), false);
-
-        // queryCompareSize,queryCompareSizePreSum
-        // queryCompareSize = std::make_unique<size_t[]>(nq);
-        // MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
-        // MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
-        // uniWatch.print(format("node {} queryCompareSize", rank), false);
-
-        // 最大堆
-
-        watch.print(format("Node {} Init", rank));
-        uniWatch.print(format("node {} finish init", rank), false);
-
-    }
+    // void init(int rank, tribase::Index* index) {
+    void init(int rank);
     
     
-    void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
+    // void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
 
-        std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k)); 
+    //     std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k)); 
 
-        //下面四个向量都和i绑定，也就是和每一个查询绑定
-        float* disi = distances; //结果，查询向量最近的k个向量的距离
-        idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
-        idx_t* listids = listidqueries.get();             // 单个查询对应的IVF聚类中心id
-        MyStopWatch w;
-        for (size_t i = 0; i < n; i++) {
-            //每一个i对应一个查询
-            scaner->set_query(queries + i * info.d);
+    //     //下面四个向量都和i绑定，也就是和每一个查询绑定
+    //     float* disi = distances; //结果，查询向量最近的k个向量的距离
+    //     idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
+    //     idx_t* listids = listidqueries.get();             // 单个查询对应的IVF聚类中心id
+    //     MyStopWatch w;
+    //     for (size_t i = 0; i < n; i++) {
+    //         //每一个i对应一个查询
+    //         scaner->set_query(queries + i * info.d);
 
-            for (size_t j = 0; j < info.nprobe; j++) {
-                //在第j个聚类中搜索所有点
+    //         for (size_t j = 0; j < info.nprobe; j++) {
+    //             //在第j个聚类中搜索所有点
 
-                idx_t ivfId = listids[j];
-                if(!(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount)) {
-                    continue;
-                }
-                idx_t index = ivfId - info.startIVFId;
-                size_t listSize = listSizes[index];
-                float* codes = listCodes[index].get();
-                size_t* ids = listIds[index].get();
-
-
-                // MyStopWatch wa;
-                scaner->lite_scan_codes(listSize, codes, ids, disi, idxi);
-                // if(i == 3) {
-                    // cout << RED << listSize << RESET << endl;
-                    // wa.print(format("q {} ivf {}", i, j), false);
-                // }
-            }
-            disi += k;
-            idxi += k;
-            // w.print(format("q {}", i));
-        }
+    //             idx_t ivfId = listids[j];
+    //             if(!(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount)) {
+    //                 continue;
+    //             }
+    //             idx_t index = ivfId - info.startIVFId;
+    //             size_t listSize = listSizes[index];
+    //             float* codes = listCodes[index].get();
+    //             size_t* ids = listIds[index].get();
 
 
-        // std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k)); 
+    //             // MyStopWatch wa;
+    //             scaner->lite_scan_codes(listSize, codes, ids, disi, idxi);
+    //             // if(i == 3) {
+    //                 // cout << RED << listSize << RESET << endl;
+    //                 // wa.print(format("q {} ivf {}", i, j), false);
+    //             // }
+    //         }
+    //         disi += k;
+    //         idxi += k;
+    //         // w.print(format("q {}", i));
+    //     }
 
-        // //下面四个向量都和i绑定，也就是和每一个查询绑定
-        // float* disi = distances; //结果，查询向量最近的k个向量的距离
-        // idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
-        // idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
 
-        // for (size_t i = 0; i < n; i++) {
-        //     //每一个i对应一个查询
-        //     scaner->set_query(queries + i * d);
-        //     //获取最近的nprobe个聚类中心
-        //     for (size_t j = 0; j < nprobe; j++) {
-        //         //在第j个聚类中搜索所有点
-        //         //list代表聚类
-        //         // IVF& list = lists[listids[j]];
-        //         idx_t ivfId = listids[j];
-        //         idx_t index = ivfId - info.startIVFId;
-        //         size_t listSize = listSizes[index];
-        //         float* codes = listCodes[index].get();
-        //         size_t* ids = listIds[index].get();
+    //     // std::unique_ptr<IVFScanBase> scaner = std::unique_ptr<IVFScanBase>(new IVFScan<MetricType::METRIC_L2, OptLevel::OPT_NONE, EdgeDevice::EDGEDEVIVE_DISABLED>(info.d, k)); 
 
-        //         //查询点到中心的距离
-        //         float centroid2query = centroids2query[j];
-        //         //聚类中的点的数量
-        //         size_t list_size = list.get_list_size();
+    //     // //下面四个向量都和i绑定，也就是和每一个查询绑定
+    //     // float* disi = distances; //结果，查询向量最近的k个向量的距离
+    //     // idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
+    //     // idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
 
-        //         size_t scan_begin = 0;
-        //         size_t scan_end = list_size;
+    //     // for (size_t i = 0; i < n; i++) {
+    //     //     //每一个i对应一个查询
+    //     //     scaner->set_query(queries + i * d);
+    //     //     //获取最近的nprobe个聚类中心
+    //     //     for (size_t j = 0; j < nprobe; j++) {
+    //     //         //在第j个聚类中搜索所有点
+    //     //         //list代表聚类
+    //     //         // IVF& list = lists[listids[j]];
+    //     //         idx_t ivfId = listids[j];
+    //     //         idx_t index = ivfId - info.startIVFId;
+    //     //         size_t listSize = listSizes[index];
+    //     //         float* codes = listCodes[index].get();
+    //     //         size_t* ids = listIds[index].get();
 
-        //         scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
-        //                         list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
-        //                         list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
-        //                         list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(),
-        //                         list.get_sub_farest_IP_dis(), list.get_sub_nearest_L2_id(),
-        //                         list.get_sub_nearest_L2_dis(), nullptr, disi, idxi, stats,
-        //                         centroid_codes.get() + listids[j] * d);
-        //     }
-        //     sort_result(METRIC_L2, k, disi, idxi);
-        //     disi += k;
-        //     idxi += k;
-        //     listids += nprobe;
-        // }
-    }
+    //     //         //查询点到中心的距离
+    //     //         float centroid2query = centroids2query[j];
+    //     //         //聚类中的点的数量
+    //     //         size_t list_size = list.get_list_size();
+
+    //     //         size_t scan_begin = 0;
+    //     //         size_t scan_end = list_size;
+
+    //     //         scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(),
+    //     //                         list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
+    //     //                         list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
+    //     //                         list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(),
+    //     //                         list.get_sub_farest_IP_dis(), list.get_sub_nearest_L2_id(),
+    //     //                         list.get_sub_nearest_L2_dis(), nullptr, disi, idxi, stats,
+    //     //                         centroid_codes.get() + listids[j] * d);
+    //     //     }
+    //     //     sort_result(METRIC_L2, k, disi, idxi);
+    //     //     disi += k;
+    //     //     idxi += k;
+    //     //     listids += nprobe;
+    //     // }
+    // }
 
     void search();
 //     void search() {
