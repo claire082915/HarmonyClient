@@ -43,6 +43,7 @@ class Index {
         idx_t* queryCompareSize;
         idx_t* queryCompareSizePreSum;
         idx_t queryStart;
+        bool cut = false;
     };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
@@ -51,7 +52,7 @@ class Index {
     void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
                                  Stats* stats, size_t startIVF, size_t ivfCount);
     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
-    void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery);
+    void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery, float* heapTop);
     void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void add(size_t n, const float* codes);
@@ -109,6 +110,7 @@ class Index {
     bool blockMalloc = false; //distanceForNQuerys是不是只是一个block的，还是所有block的
 
     std::unique_ptr<float[]> originalQuery;
+    std::unique_ptr<float[]> heapTops;
 };
 
 }  // namespace tribase

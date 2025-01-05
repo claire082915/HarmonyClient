@@ -2,18 +2,18 @@
 #include "Index.h"
 namespace tribase {
 
-void Worker::addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer) {
-    assert(rank != 0 && info.block_dim != 0);
+// void Worker::addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer) {
+//     assert(rank != 0 && info.block_dim != 0);
 
-    listCodes = vector<std::unique_ptr<float[]>>(info.nlist);
-    // #pragma omp parallel for
-    for (size_t i = 0; i < info.nlist; i++) {
-        this->listCodes[i] = std::make_unique<float[]>(listSizes[i] * info.d);
-        copy_n_partial_vector(listCodesBuffer[i].get(), this->listCodes[i].get(), info.d, info.block_dim,
-                              (rank - 1) * info.block_dim, listSizes[i]);
-    }
+//     listCodes = vector<std::unique_ptr<float[]>>(info.nlist);
+//     // #pragma omp parallel for
+//     for (size_t i = 0; i < info.nlist; i++) {
+//         this->listCodes[i] = std::make_unique<float[]>(listSizes[i] * info.d);
+//         copy_n_partial_vector(listCodesBuffer[i].get(), this->listCodes[i].get(), info.d, info.block_dim,
+//                               (rank - 1) * info.block_dim, listSizes[i]);
+//     }
 
-}
+// }
 void Worker::init(int rank) {
     MyStopWatch watch(false);
 
@@ -68,7 +68,7 @@ void Worker::init(int rank) {
     index->originalQuery = std::make_unique<float[]>(presumeNq * info.d);
     this->querys = std::make_unique<float[]>(presumeNq * info.block_dim);
     listidqueries = std::make_unique<idx_t[]>(presumeNq * info.nprobe);  // 最近的nprobe个聚类中心的id
-    heapTops = std::make_unique<float[]>(presumeNq);
+    index->heapTops = std::make_unique<float[]>(presumeNq);
     queryCompareSize = std::make_unique<idx_t[]>(presumeNq);
     queryCompareSizePreSum = std::make_unique<idx_t[]>(presumeNq + 1);
     sendNextWorker = std::make_unique<idx_t[]>(info.blockCount);
@@ -122,7 +122,7 @@ void Worker::init(int rank) {
 
     // 最大堆
     // heapTops = std::make_unique<float[]>(nq);
-    MPI_Bcast(heapTops.get(), nq, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(index->heapTops.get(), nq, MPI_FLOAT, 0, MPI_COMM_WORLD);
     uniWatch.print(format("node {} heapTops", rank), false);
     // for(int i = 0; i < nq; i++) {
     //     cout << format("Q{}, top{}", i, heapTops[i]) << endl;
@@ -166,55 +166,56 @@ void Worker::searchBlock(size_t blockId, bool cut) {
     param.queryCompareSize = queryCompareSize.get();
     param.queryCompareSizePreSum = queryCompareSizePreSum.get();
     param.queryStart = queryStart;
+    param.cut = cut;
 
-    // index->search(blockSize, querys.get() + queryStart * info.block_dim, 0, distanceBuffer, NULL, 1, &param);
-
-    size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), blockSize);
-//     // cout << "node " << rank << " nt = " << nt << endl;
     size_t skip = 0;
-#pragma omp parallel for num_threads(nt) reduction(+:skip)
-// #pragma omp parallel for num_threads(nt)
-    for (size_t q = queryStart; q < queryStart + blockSize; q++) {
-        // cout << "node " << rank << " nt = " << omp_get_num_threads() << endl;
-        size_t queryOffset =
-            queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
+    index->search(blockSize, querys.get() + queryStart * info.block_dim, 0, distanceBuffer, NULL, 1, &param);
 
-        size_t curDistancePosition = 0;  // 在一个查询向量的结果内
-        for (size_t i = 0; i < info.nprobe; i++) {
-            idx_t ivfId = listidqueries[q * info.nprobe + i];
-            for (size_t v = 0; v < listSizes[ivfId]; v++) {
-                if(cut) {
-                    // if(distancesForBlocks[blockId][queryOffset + curDistancePosition] == INFINITY) {
-                    if(distanceBuffer[queryOffset + curDistancePosition] == INFINITY) {
-                        skip++;
-                    } else {
-                        float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
-                                                                listCodes[ivfId].get() + v * info.block_dim,
-                                                                info.block_dim);
-                        // cout << " " << queryOffset + curDistancePosition  << endl;
+//     size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), blockSize);
+// //     // cout << "node " << rank << " nt = " << nt << endl;
+// #pragma omp parallel for num_threads(nt) reduction(+:skip)
+// // #pragma omp parallel for num_threads(nt)
+//     for (size_t q = queryStart; q < queryStart + blockSize; q++) {
+//         // cout << "node " << rank << " nt = " << omp_get_num_threads() << endl;
+//         size_t queryOffset =
+//             queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
+
+//         size_t curDistancePosition = 0;  // 在一个查询向量的结果内
+//         for (size_t i = 0; i < info.nprobe; i++) {
+//             idx_t ivfId = listidqueries[q * info.nprobe + i];
+//             for (size_t v = 0; v < listSizes[ivfId]; v++) {
+//                 if(cut) {
+//                     // if(distancesForBlocks[blockId][queryOffset + curDistancePosition] == INFINITY) {
+//                     if(distanceBuffer[queryOffset + curDistancePosition] == INFINITY) {
+//                         skip++;
+//                     } else {
+//                         float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
+//                                                                 listCodes[ivfId].get() + v * info.block_dim,
+//                                                                 info.block_dim);
+//                         // cout << " " << queryOffset + curDistancePosition  << endl;
                         
-                        // assert(queryOffset + curDistancePosition < totalQueryCompareSize);
-                        distanceBuffer[queryOffset + curDistancePosition] += dis;
-                        if (distanceBuffer[queryOffset + curDistancePosition] > heapTops[q]) {
-                            distanceBuffer[queryOffset + curDistancePosition] = INFINITY;
-                        }
-                    }
-                    curDistancePosition++;
-                } else {
-                    float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
-                                                            listCodes[ivfId].get() + v * info.block_dim,
-                                                            info.block_dim);
-                    // cout << " " << queryOffset + curDistancePosition  << endl;
-                    assert(queryOffset + curDistancePosition < totalQueryCompareSize);
-                    distanceBuffer[queryOffset + curDistancePosition] += dis;
-                    curDistancePosition++;
-                }
+//                         // assert(queryOffset + curDistancePosition < totalQueryCompareSize);
+//                         distanceBuffer[queryOffset + curDistancePosition] += dis;
+//                         if (distanceBuffer[queryOffset + curDistancePosition] > heapTops[q]) {
+//                             distanceBuffer[queryOffset + curDistancePosition] = INFINITY;
+//                         }
+//                     }
+//                     curDistancePosition++;
+//                 } else {
+//                     float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
+//                                                             listCodes[ivfId].get() + v * info.block_dim,
+//                                                             info.block_dim);
+//                     // cout << " " << queryOffset + curDistancePosition  << endl;
+//                     assert(queryOffset + curDistancePosition < totalQueryCompareSize);
+//                     distanceBuffer[queryOffset + curDistancePosition] += dis;
+//                     curDistancePosition++;
+//                 }
                 
-            }
-        }
-        // cout << curDistancePosition << " " << queryCompareSize[q] << endl;
-        assert(curDistancePosition == queryCompareSize[q]);
-    }
+//             }
+//         }
+//         // cout << curDistancePosition << " " << queryCompareSize[q] << endl;
+//         assert(curDistancePosition == queryCompareSize[q]);
+//     }
 
     uniWatch.print(format("ready to perform node({}) -> block({}) -> node({})", rank, blockId, sendNextWorker[blockId]), false);
     MyStopWatch watch(false);

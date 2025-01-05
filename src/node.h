@@ -58,7 +58,7 @@ public:
     size_t nq = 0;
     // std::unique_ptr<IVF[]> ivfs;      // nlist个聚类,聚类内部的向量维度是block_dim
     std::unique_ptr<size_t[]> listSizes;         // nlist个聚类的向量数
-    vector<std::unique_ptr<float[]>> listCodes;  // nlist个聚类的向量数
+    // vector<std::unique_ptr<float[]>> listCodes;  // nlist个聚类的向量数
     std::unique_ptr<float[]> querys;             // nq个查询向量, 维度是block_dim
     // std::unique_ptr<SearchBlock[]> blocks;       // 按照搜索顺序排列，第1个先搜索
     std::unique_ptr<idx_t[]> blockSearchOrder;   // search block的顺序，第i个元素是第i个要进行search的blockId
@@ -66,7 +66,7 @@ public:
     std::unique_ptr<idx_t[]> queryCompareSize;  // nq * nprobe 查询向量相近的聚类id
     // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
     std::unique_ptr<idx_t[]> queryCompareSizePreSum;
-    std::unique_ptr<float[]> heapTops;
+    // std::unique_ptr<float[]> heapTops;
 
     // 每一块的计算结果的临时存储
     class DistanceBufferPool {

@@ -1240,7 +1240,7 @@ float ratio, Stats* stats) {
         listids += nprobe;
     }
 }
-void Index::single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery) {
+void Index::single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery, float* heapTop) {
     // std::cout << BLUE << "simple version of search" << RESET;
     //n是查询向量的数量，queries是查询向量的起始位置，distance是结果存放的起始位置, k指前k个
 
@@ -1258,6 +1258,7 @@ void Index::single_thread_search_worker(size_t n, const float* queries, float* d
     idx_t* listids = listidqueries.get();//单个查询对应的聚类中心id
 
     idx_t disPos = 0;
+    size_t skip = 0;
     for (size_t i = 0; i < n; i++) {
         //每一个i对应一个查询
         scaner_quantizer->set_query(originalQuery + i * d);
@@ -1270,10 +1271,10 @@ void Index::single_thread_search_worker(size_t n, const float* queries, float* d
                                           listids); //ret , 分别对应堆
         //要查的聚类id存储在listids的前nprobe个
         sort_result(metric, nprobe, centroids2query, listids);
-        if(i == 0) {
+        // if(i == 0) {
 
         // printVector();
-        }
+        // }
 
         if (metric == MetricType::METRIC_L2) {
             for (size_t j = 0; j < nprobe; j++) {
@@ -1288,9 +1289,22 @@ void Index::single_thread_search_worker(size_t n, const float* queries, float* d
 
 
                 for (size_t k = 0; k < list_size; k++) {
-                    const float* candicate = list.get_candidate_codes() + k * param->block_dim;
-                    float dis = calculatedEuclideanDistance(queries + j * param->block_dim, candicate, param->block_dim);
-                    distances[disPos] += dis;
+                    if(param->cut) {
+                        if(distances[disPos] == INFINITY) {
+                            skip++;
+                        } else {
+                            const float* candicate = list.get_candidate_codes() + k * param->block_dim;
+                            float dis = calculatedEuclideanDistance(queries + i * param->block_dim, candicate, param->block_dim);
+                            distances[disPos] += dis;
+                            if (distances[disPos] > heapTop[i]) {
+                                distances[disPos] = INFINITY;
+                            }
+                        }
+                    } else {
+                        const float* candicate = list.get_candidate_codes() + k * param->block_dim;
+                        float dis = calculatedEuclideanDistance(queries + i * param->block_dim, candicate, param->block_dim);
+                        distances[disPos] += dis;
+                    }
                     disPos++;
                 }
                 // cout << i <<  " " << list_size;
@@ -1608,7 +1622,10 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     }
     // distance是最终结果，是nq个k维的float向量，每一个float对应着和一个相近向量的距离, labels是对应相近向量的id
     // 在distance内部的每一行，对应着一个查询，将其看作一个容量为k的优先队列
-    init_result(metric, n * k, distances, labels);
+    if(param && param->mode == SearchMode::DIVIDE_DIM_WORKER) {
+    } else {
+        init_result(metric, n * k, distances, labels);
+    }
 
     if(param) {
         if (param->mode == SearchMode::DIVIDE_DIM) {
@@ -1645,9 +1662,11 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
             // end - start是查询向量的数量，queries + start * d是查询向量的起始位置，distance + start * k
             // 是结果存放的起始位置
             if(param->mode == SearchMode::DIVIDE_DIM_WORKER) {
-                size_t queryOffset = param->queryCompareSizePreSum[start + param->queryStart] - param->queryCompareSizePreSum[param->queryStart];  // 第q个查询的结果应该存的地址偏移量
+                idx_t queryOffset = param->queryCompareSizePreSum[start + param->queryStart] - param->queryCompareSizePreSum[param->queryStart];  // 第q个查询的结果应该存的地址偏移量
+                // cout << format("start {} queryOffset {}", start, queryOffset) << endl;
+                // cout << format("blockdim {} queryStart {} d {}", param->block_dim, param->queryStart, d) << endl;
                 single_thread_search_worker(end - start, queries + start * param->block_dim, distances + queryOffset, ratio,
-                                 &stats[i], param, originalQuery.get() + start * d);
+                                 &stats[i], param, originalQuery.get() + (param->queryStart + start) * d, heapTops.get() + start + param->queryStart);
             }
             else if(param->divideIVFVersionOriginal) {
                 single_thread_search(end - start, queries + start * d, k, distances + start * k, labels + start * k, ratio,
