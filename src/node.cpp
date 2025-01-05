@@ -47,26 +47,15 @@ void BaseWorker::init(int rank) {
             totalNb += listSizes[i];
         }
 
-        // listCodes = vector<std::unique_ptr<float[]>>(info.ivfCount); //每个聚类对应的codes
-        // listIds = vector<std::unique_ptr<size_t[]>>(info.ivfCount); //每个聚类对应的ids
-        
-        // auto curCodes = listCodes.get();
-        // auto curIds = listIds.get();
         for (size_t i = 0; i < info.ivfCount; i++) {
             MPI_Recv(index->lists[i].candidate_codes.get(), listSizes[i] * info.d , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             MPI_Recv(index->lists[i].candidate_id.get(), listSizes[i] * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // listCodes[i] = std::make_unique<float[]>(listSizes[i] * info.d);
-            // listIds[i] = std::make_unique<size_t[]>(listSizes[i]);
-            // MPI_Recv(listCodes[i].get(), listSizes[i] * info.d , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // MPI_Recv(listIds[i].get(), listSizes[i] * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // MPI_Recv(curCodes, listSizes[i] * info.d , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // MPI_Recv(curIds, listSizes[i] * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            // curCodes += listSizes[i] * info.d;
-            // curIds += listSizes[i];
         }
         watch.print("listCodes and listIds");
+
         MPI_Bcast(index->centroid_codes.get(), info.nlist * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
         MPI_Bcast(index->centroid_ids.get(), info.nlist , MPI_INT64_T, 0, MPI_COMM_WORLD);
+
         //提前malloc
         int presumeNq = 10000;
         int presumeK = 1000;
@@ -114,12 +103,8 @@ void BaseWorker::init(int rank) {
 
 void BaseWorker::search() {
 
-    cout << index->opt_level << " index "<< index->added_opt_level << endl;
-    for(int i = 0; i < 3; i++) {
-        // printVector(index->lists[i].candidate_id.get(), index->lists[i].get_list_size(), RED);
-        // printVector(querys.get(), nq, RED);
-    }
     uniWatch.print(format("node {} index search start", rank), false);
+
     Index::Param oriParam;
     oriParam.mode = Index::SearchMode::ORIGINAL;
     oriParam.divideIVFVersionOriginal = true;
@@ -127,16 +112,12 @@ void BaseWorker::search() {
     oriParam.ivfCount = info.ivfCount;
 
     index->search(nq, querys.get(), k, distances.get(), labels.get(), 1, &oriParam);
-// for(int i = 0; i < 3; i++) {
-//                             // if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
-//                                 std::cout << "Q" << i << " " << std::endl;
-//                                 printVector(distances.get() + i * k, k, BLUE);
-//                                 printVector(labels.get() + i * k, k, BLUE);
-//                             // }
-//                         }
+
     uniWatch.print(format("node {} search", rank), false);
+
     MPI_Send(distances.get(), k * nq, MPI_FLOAT, 0, 0, MPI_COMM_WORLD); 
     MPI_Send(labels.get(), k * nq, MPI_INT64_T, 0, 0, MPI_COMM_WORLD); 
+
     uniWatch.print(format("node {} send", rank), false);
 }
 }  // namespace tribase
