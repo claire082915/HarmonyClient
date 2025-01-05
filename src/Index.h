@@ -32,12 +32,17 @@ class Index {
         ORIGINAL,
         DIVIDE_IVF,
         DIVIDE_DIM,
+        DIVIDE_DIM_WORKER,
     };
     struct Param {
         bool orderOptimize = true;
         SearchMode mode;
         bool divideIVFVersionOriginal = false;
         size_t startIVFId = 0, ivfCount = 0;
+        size_t block_dim;
+        idx_t* queryCompareSize;
+        idx_t* queryCompareSizePreSum;
+        idx_t queryStart;
     };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
@@ -46,6 +51,7 @@ class Index {
     void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
                                  Stats* stats, size_t startIVF, size_t ivfCount);
     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
+    void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery);
     void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void add(size_t n, const float* codes);
@@ -102,7 +108,7 @@ class Index {
     // idx_t threashHold = INT_MAX;
     bool blockMalloc = false; //distanceForNQuerys是不是只是一个block的，还是所有block的
 
-    
+    std::unique_ptr<float[]> originalQuery;
 };
 
 }  // namespace tribase
