@@ -145,10 +145,13 @@ int main(int argc, char* argv[]) {
     bool cut = program.get<bool>("cut");
     bool run_faiss = program.get<bool>("run_faiss");
 
-    char* job_id = std::getenv("SLURM_JOB_ID");
-    char* node_list = std::getenv("SLURM_JOB_NODELIST");
-    char* num_nodes = std::getenv("SLURM_NNODES");
+    // char* job_id = std::getenv("SLURM_JOB_ID");
+    // char* node_list = std::getenv("SLURM_JOB_NODELIST");
+    // char* num_nodes = std::getenv("SLURM_NNODES");
     
+    char* job_id = "no";
+    char* node_list = "no";
+    char* num_nodes = "no";
 
     if (rank != 0) {
         if(!run_faiss) {

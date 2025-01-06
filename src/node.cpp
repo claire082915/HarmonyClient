@@ -97,7 +97,7 @@ void Worker::init(int rank) {
 
     MPI_Barrier(MPI_COMM_WORLD); //对应preSearch最后的barrier
 
-    uniWatch = MyStopWatch(false, "uniWatch", MAG);
+    uniWatch = MyStopWatch(true, "uniWatch", MAG);
     uniWatch.print(format("node {} cross barrier", rank), false);
 
     // nq, querys
@@ -146,6 +146,7 @@ void Worker::init(int rank) {
 }
 
 void Worker::searchBlock(size_t blockId, bool cut) {
+    uniWatch.print(format("node {} start searchBlock {}", rank, blockId), false);
     MyStopWatch searchWatch(true, "searchBlock");
 
 

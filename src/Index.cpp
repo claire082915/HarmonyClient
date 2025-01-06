@@ -173,7 +173,7 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
             MPI_Send(workerSearchBlockOrder[i].data(), blockCount, MPI_INT64_T, i, 0, MPI_COMM_WORLD);
         }
         for (size_t i = 1; i <= workerCount; i++) {
-            // printVector(workerSearchBlockOrder[i], BLUE);
+            printVector(workerSearchBlockOrder[i], BLUE);
         }
 
         //对于每一个块，其搜索的顺序，即一系列rank
