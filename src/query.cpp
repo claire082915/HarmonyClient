@@ -145,12 +145,27 @@ int main(int argc, char* argv[]) {
     bool cut = program.get<bool>("cut");
     bool run_faiss = program.get<bool>("run_faiss");
 
+    char* job_id = std::getenv("SLURM_JOB_ID");
+    char* node_list = std::getenv("SLURM_JOB_NODELIST");
+    char* num_nodes = std::getenv("SLURM_NNODES");
+    
+
     if (rank != 0) {
         if(!run_faiss) {
             MPI_Barrier(MPI_COMM_WORLD);
             workerMain(rank, cut, divideIVF);
         }
     } else {
+        if (job_id && node_list && num_nodes) {
+            std::cout << "Job ID: " << job_id << std::endl;
+            std::cout << "Nodes List: " << node_list << std::endl;
+            std::cout << "Number of Nodes: " << num_nodes << std::endl;
+        } 
+
+        std::cout << "Arguments passed to the program:" << std::endl;
+        for (int i = 0; i < argc; i++) {
+            std::cout << argv[i] << " ";
+        }
         cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
         
         std::vector<size_t> nprobes = program.get<std::vector<size_t>>("nprobes");
@@ -556,6 +571,7 @@ int main(int argc, char* argv[]) {
             stats.disableOrderOptimize = disableOrderOptimize;
             stats.divideIVF = divideIVF;
             stats.cut = cut;
+            stats.nodeList = node_list;
             
             if (recall == 1) {
                 early_stop_flag = true;

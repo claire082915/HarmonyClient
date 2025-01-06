@@ -45,6 +45,7 @@ class Stats {
     double recall;
     double r2;
     float simi_ratio;
+    char* nodeList;
 
     // summary
    private:
@@ -116,14 +117,14 @@ class Stats {
     }
     void myToCsv(std::string filename, bool append, std::string dataset = "Unknown") {
         CsvWriter writer(filename,
-                         {"dataset", "nlist", "nprobe", "divideIVF", "disableOrderOptimize", "cut", "block", "worker", 
+                         {"dataset", "nlist", "nprobe", "divideIVF", "orderOptimize", "cut", "block", "worker", 
                           "time_speedup", "query_time",
-                          "recall", "r2"},
+                          "recall", "r2", "node"},
                          append, false);
         summary();
-        writer << dataset << nlist << nprobe <<  divideIVF << disableOrderOptimize << cut << block << worker
+        writer << dataset << nlist << nprobe <<  divideIVF << !disableOrderOptimize << cut << block << worker
                << blockVersionSpeedUpWithOriginal << query_time
-               << recall << r2 << std::endl;
+               << recall << r2 << nodeList << std::endl;
     }
 };
 

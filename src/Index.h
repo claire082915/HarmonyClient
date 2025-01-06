@@ -43,17 +43,18 @@ class Index {
         idx_t* queryCompareSize;
         idx_t* queryCompareSizePreSum;
         idx_t queryStart;
+        idx_t* listidqueries;
         bool cut = false;
     };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
     void single_thread_nearest_cluster_search(size_t n, const float* queries, float* distances, idx_t* labels);
     void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
-    void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
+    int single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
                                  Stats* stats, size_t startIVF, size_t ivfCount);
     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
-    void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery, float* heapTop);
-    void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
+    void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery, float* heapTop, idx_t* listidqueries);
+    void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* label);
     void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void add(size_t n, const float* codes);
     void add_simple(size_t n, const float* codes);
@@ -66,10 +67,10 @@ class Index {
    
     void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param);
     // 其他查询方法的声明
+    std::unique_ptr<IVFScanBase> get_scanner(MetricType metric, OptLevel opt_level, size_t k, EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
 
    private:
     void warmUpSearch(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, idx_t* listidqueries);
-    std::unique_ptr<IVFScanBase> get_scanner(MetricType metric, OptLevel opt_level, size_t k, EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
       std::unique_ptr<idx_t[]> findNearNprobeOfCentroidIds(size_t n, const float* queries);
    public:
     size_t d;
