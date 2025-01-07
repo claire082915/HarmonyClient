@@ -154,10 +154,10 @@ int main(int argc, char* argv[]) {
     char* num_nodes = "no";
 
     if (rank != 0) {
-        if(!run_faiss) {
-            MPI_Barrier(MPI_COMM_WORLD);
-            workerMain(rank, cut, divideIVF);
-        }
+        // if(!run_faiss) {
+        //     MPI_Barrier(MPI_COMM_WORLD);
+        //     workerMain(rank, cut, divideIVF);
+        // }
     } else {
         if (job_id && node_list && num_nodes) {
             std::cout << "Job ID: " << job_id << std::endl;
@@ -599,37 +599,37 @@ int main(int argc, char* argv[]) {
                     oriParam.mode = Index::SearchMode::ORIGINAL;
                     Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
                     oriStat.print();
-                    MPI_Barrier(MPI_COMM_WORLD);
+                    // MPI_Barrier(MPI_COMM_WORLD);
 
-                    std::cout << YELLOW;
+                    // std::cout << YELLOW;
 
-                    Index::Param param;
-                    param.orderOptimize = !disableOrderOptimize;
-                    if(divideIVF) {
-                        param.mode = Index::SearchMode::DIVIDE_IVF;
-                    } else if (block_version) {
-                        param.mode = Index::SearchMode::DIVIDE_DIM;
-                    } else {
-                        param.mode = Index::SearchMode::ORIGINAL;
-                    }
+                    // Index::Param param;
+                    // param.orderOptimize = !disableOrderOptimize;
+                    // if(divideIVF) {
+                    //     param.mode = Index::SearchMode::DIVIDE_IVF;
+                    // } else if (block_version) {
+                    //     param.mode = Index::SearchMode::DIVIDE_DIM;
+                    // } else {
+                    //     param.mode = Index::SearchMode::ORIGINAL;
+                    // }
 
-                    if (param.mode != Index::SearchMode::ORIGINAL) {
-                        Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
-                        stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
-                        cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
-                        stat.print();
-                        stat.myToCsv(log_path, true, dataset);
-                    } 
-                    for(int i = 0; i < 2; i++) {
-                        if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
-                            std::cout << "Q" << i << " " << std::endl;
-                            printVector(distances.get() + i * k, k, BLUE);
-                            printVector(distancesB.get() + i * k, k, BLUE);
-                            printVector(labels.get() + i * k, k, GREEN);
-                            printVector(labelsB.get() + i * k, k, GREEN);
-                        }
-                    }
-                    std::cout << RESET;
+                    // if (param.mode != Index::SearchMode::ORIGINAL) {
+                    //     Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
+                    //     stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
+                    //     cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
+                    //     stat.print();
+                    //     stat.myToCsv(log_path, true, dataset);
+                    // } 
+                    // for(int i = 0; i < 2; i++) {
+                    //     if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                    //         std::cout << "Q" << i << " " << std::endl;
+                    //         printVector(distances.get() + i * k, k, BLUE);
+                    //         printVector(distancesB.get() + i * k, k, BLUE);
+                    //         printVector(labels.get() + i * k, k, GREEN);
+                    //         printVector(labelsB.get() + i * k, k, GREEN);
+                    //     }
+                    // }
+                    // std::cout << RESET;
                     // }
                 }
             }
