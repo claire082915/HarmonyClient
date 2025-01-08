@@ -620,15 +620,15 @@ int main(int argc, char* argv[]) {
                         stat.print();
                         stat.myToCsv(log_path, true, dataset);
                     } 
-                    for(int i = 0; i < 2; i++) {
-                        if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
-                            std::cout << "Q" << i << " " << std::endl;
-                            printVector(distances.get() + i * k, k, BLUE);
-                            printVector(distancesB.get() + i * k, k, BLUE);
-                            printVector(labels.get() + i * k, k, GREEN);
-                            printVector(labelsB.get() + i * k, k, GREEN);
-                        }
-                    }
+                    // for(int i = 0; i < 2; i++) {
+                    //     if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                    //         std::cout << "Q" << i << " " << std::endl;
+                    //         printVector(distances.get() + i * k, k, BLUE);
+                    //         printVector(distancesB.get() + i * k, k, BLUE);
+                    //         printVector(labels.get() + i * k, k, GREEN);
+                    //         printVector(labelsB.get() + i * k, k, GREEN);
+                    //     }
+                    // }
                     std::cout << RESET;
                     // }
                 }

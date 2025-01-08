@@ -51,6 +51,7 @@ void Worker::init(int rank) {
                               (rank - 1) * info.block_dim, listSizes[i]);
     }
 
+
     MPI_Bcast(index->centroid_codes.get(), info.nlist * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
     MPI_Bcast(index->centroid_ids.get(), info.nlist , MPI_INT64_T, 0, MPI_COMM_WORLD);
 
@@ -627,6 +628,51 @@ void BaseWorker::single_thread_search_simple(size_t n, const float* queries, siz
                 // cout << RED << listSize << RESET << endl;
                 // wa.print(format("q {} ivf {}", i, j), false);
             // }
+        }
+        simi += k;
+        idxi += k;
+        listids += info.nprobe;
+        
+        // w.print(format("q {}", i));
+    }
+}
+void BaseWorker::single_thread_search_slow(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, idx_t* listidqueries) {
+    
+
+    //下面四个向量都和i绑定，也就是和每一个查询绑定
+    float* simi = distances; //结果，查询向量最近的k个向量的距离
+    idx_t* idxi = labels; //结果，查询向量最近的k个向量的id
+    idx_t* listids = listidqueries;             // 单个查询对应的IVF聚类中心id
+    // MyStopWatch w;
+    idx_t disPos = 0;
+    for (size_t i = 0; i < n; i++) {
+        //每一个i对应一个查询
+        // scaner->set_query(queries + i * info.d);
+        // printVector(listids, info.nprobe, GREEN);
+        for (size_t j = 0; j < info.nprobe; j++) {
+            //在第j个聚类中搜索所有点
+
+            idx_t ivfId = listids[j];
+            if(!(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount)) {
+                continue;
+            }
+            // idx_t index = ivfId - info.startIVFId;
+            IVF& list = index->lists[ivfId - info.startIVFId];
+            // size_t listSize = listSize[index];
+            // float* codes = listCodes[index].get();
+            // size_t* ids = listIds[index].get();
+            // size_t listSize = list.get_list_size();
+            // float* codes = list.candidate_codes.get();
+            // size_t* ids = list.candidate_id.get();
+
+            for (size_t k = 0; k < list_size; k++) {
+                const float* candicate = list.get_candidate_codes() + k * d;
+                float dis = calculatedEuclideanDistance(queries + i * d, candicate, d);
+                distances[disPos] += dis;
+                disPos++;
+            } 
+
+
         }
         simi += k;
         idxi += k;

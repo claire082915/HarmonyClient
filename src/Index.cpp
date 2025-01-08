@@ -47,6 +47,8 @@ Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel 
 
 // }
 
+vector<size_t> beginIVFs;
+vector<size_t> ivfCounts;
 void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param) {
     if(param.mode == SearchMode::ORIGINAL) {
         return;
@@ -58,10 +60,13 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
     this->warmUpSearchListSize = warmUpSearchListSize;
 
     if(param.mode == SearchMode::DIVIDE_IVF) {
-
+        beginIVFs = vector<size_t>(workerCount + 1);
+        ivfCounts = vector<size_t>(workerCount + 1);
         for(size_t rank = 1; rank <= workerCount; rank++) {
             size_t beginIVF = (rank - 1) * (nlist / workerCount); 
             size_t ivfCount = (rank == workerCount) ? (nlist - beginIVF) : (nlist / workerCount);
+            beginIVFs[rank] = beginIVF;
+            ivfCounts[rank] = ivfCount;
             auto info = BaseWorker::InitInfo(d, workerCount, nlist, nprobe, nb, beginIVF, ivfCount);
             MPI_Send(&info, sizeof(BaseWorker::InitInfo), MPI_BYTE, rank, 0, MPI_COMM_WORLD);
 
@@ -1111,6 +1116,43 @@ void Index::search_divide_ivf(size_t n, const float* queries, size_t k, float* d
     // n个查询向量对应的nprobe个聚类中心id
     std::unique_ptr<idx_t[]> listidqueries = findNearNprobeOfCentroidIds(n, queries);
     watch.print("findNearNprobeOfCentroidIds");
+    
+    //算出每个worker的每个查询向量的数据量是多少
+    vector<std::unique_ptr<idx_t[]>> queryCompareSize = vector<std::unique_ptr<idx_t[]>>(workerCount + 1);
+    for(int rank = 1; rank <= workerCount; rank++) {
+        queryCompareSize[rank] = std::make_unique<idx_t[]>(n);
+    }
+    // printVector(beginIVFs, GREEN);
+    // printVector(ivfCounts, RED);
+    
+    
+    for(size_t q = 0; q < n; q++) {
+        idx_t* listIds = listidqueries.get() + q * nprobe;
+        // printVector(listIds, nprobe, RED);
+        for(size_t i = 0; i < nprobe; i++) {
+            idx_t listId = listIds[i];
+            for(size_t rank = 1; rank <= workerCount; rank++) {
+                if(listId >= beginIVFs[rank] && listId < beginIVFs[rank] + ivfCounts[rank]) {
+                    queryCompareSize[rank][q] += lists[listId].get_list_size();
+                    // cout << format("rank {} q{} listid {}", rank, q, listId) << endl;
+                }
+            }
+        }
+    }
+    vector<std::unique_ptr<idx_t[]>> queryCompareSizePreSum = vector<std::unique_ptr<idx_t[]>>(workerCount + 1);
+    for(int rank = 1; rank <= workerCount; rank++) {
+        queryCompareSizePreSum[rank] = std::make_unique<idx_t[]>(n + 1);
+    }
+    for(size_t rank = 1; rank <= workerCount; rank++) {
+        for (size_t q = 1; q < n + 1; q++) {
+            queryCompareSizePreSum[rank][q] = queryCompareSizePreSum[rank][q - 1] + queryCompareSize[rank][q - 1];
+        }
+    }
+    for(int rank = 1; rank <= workerCount; rank++) {
+        // MPI_Send(queryCompareSizePreSum[rank].get(), n,MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
+        MPI_Send(queryCompareSizePreSum[rank].get(), n + 1,MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
+    }
+    watch.print("queryCompareSize");
 
     // 3. nq, k, querys
     MPI_Bcast(&n, sizeof(n), MPI_BYTE, 0, MPI_COMM_WORLD);
