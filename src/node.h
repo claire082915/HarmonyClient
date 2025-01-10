@@ -55,7 +55,7 @@ public:
 
     size_t rank = 0;
     size_t blockSize = 0;
-    size_t nq = 0;
+    size_t nq = 0, k = 0;
     // std::unique_ptr<IVF[]> ivfs;      // nlist个聚类,聚类内部的向量维度是block_dim
     std::unique_ptr<size_t[]> listSizes;         // nlist个聚类的向量数
     // vector<std::unique_ptr<float[]>> listCodes;  // nlist个聚类的向量数
@@ -66,9 +66,15 @@ public:
     std::unique_ptr<idx_t[]> queryCompareSize;  // nq * nprobe 查询向量相近的聚类id
     // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
     std::unique_ptr<idx_t[]> queryCompareSizePreSum;
+
+    vector<std::unique_ptr<float[]>> distanceHeap;
+    vector<std::unique_ptr<idx_t[]>> idHeap;
+
     // std::unique_ptr<float[]> heapTops;
     vector<std::unique_ptr<float[]>> distancesForBlocks;
     size_t blockDistancesSize;
+    double waitTime = 0, searchTime = 0;
+    size_t presumeNq = 10000, presumeK = 100;
     // // 每一块的计算结果的临时存储
     // class DistanceBufferPool {
     //     vector<std::unique_ptr<float[]>> distancesForBlocks;
@@ -234,6 +240,8 @@ public:
     // vector<MPI_Request> infoRequests;
     vector<vector<MPI_Request>> disRequests;
     vector<MPI_Request> sendRequests;
+    vector<MPI_Request> sendDistanceRequests;
+    vector<MPI_Request> sendIdRequests;
     
     // vector<MPI_Status> statuses;
 
@@ -244,79 +252,24 @@ public:
 
     std::unique_ptr<Index> index;
 
-    void init(int rank);
+    bool blockSend = false;
+    bool cut = false;
+    std::unique_ptr<float[]> heapTops;
+    vector<double> skipRates;
+
+
+    void init(int rank, bool blockSend);
+    bool shouldSendHeap(size_t blockId) {
+        return  sendNextWorker[blockId] == 0;
+    }
    
     void addQuerys(const float* querys, size_t nq) {
         // this->querys = std::make_unique<float[]>(nq * info.block_dim);
         copy_n_partial_vector(querys, this->querys.get(), info.d, info.block_dim, info.block_dim * (rank - 1), nq);
     }
 
-    void search(bool cut) {
-        uniWatch.print(format("node {} search() start", rank), false);
-        MyStopWatch totalWatch(true, "total search watch");
-        int searchedBlockCount = 0;
-        vector<bool> isBlockSearched = vector<bool>(info.blockCount);
+    void search(bool cut);
 
-        //先给可以算的分配内存
-        for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
-            if(recvPrevWorker[blockId] == 0) {
-                //直接标记使用
-                // distanceBufferPool->use(blockId);
-            }
-        }
-        for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
-            if(recvPrevWorker[blockId] != 0) {
-                size_t sender = recvPrevWorker[blockId];
-                // tag 当做blockId
-                MPI_Irecv(distancesForBlocks[blockId].get(), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId][0]);
-                // MPI_Irecv(distanceBufferPool->getBuffer(blockId), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
-                // bool suc = distanceBufferPool->IRecv(blockId, getTotalQueryCompareSize(blockId), sender, disRequests[blockId]);
-                // if(!suc) {
-                //     break;
-                // }
-                // cout << format("node({}) waiting for block({}) from node({})", rank, blockId, sender) << endl;
-            } 
-        }
-
-        //不断查
-        MyStopWatch watch(true);
-        while(searchedBlockCount < info.blockCount)
-        for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
-            if(isBlockSearched[blockId]) {
-                continue;
-            }
-            if(recvPrevWorker[blockId] == 0) {
-                // searchBlock(blockId, cut);
-                searchBlock(blockId, cut);
-                isBlockSearched[blockId] = true;
-                searchedBlockCount++;
-                watch.reset();
-            } else {
-                int isReceived;
-                MPI_Status stat;
-                bool testFail = false;
-                for(auto& req : disRequests[blockId]) {
-                    MPI_Test(&req, &isReceived, &stat);
-                    if(!isReceived) {
-                        testFail = true;
-                        break;
-                    }
-                }
-                if(!testFail) {
-                    // cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
-                    watch.print(format("node {} waiting , now received block {}", rank, blockId));
-                    searchBlock(blockId, cut);
-                    watch.reset();
-                    searchedBlockCount++;
-                    isBlockSearched[blockId] = true;
-                }
-            }
-        }
-        totalWatch.print(format("Search Finished node({}), total skip:{:.1f}%", rank, (double)totalSkip / totalCompare * 100));
-
-        MPI_Waitall(sendRequests.size(), sendRequests.data(), MPI_STATUS_IGNORE);
-
-    }
     idx_t getTotalQueryCompareSize(size_t blockId) {
         size_t queryStart = blockId * blockSize;
         idx_t totalQueryCompareSize = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
@@ -325,6 +278,12 @@ public:
         //     throw std::invalid_argument("increase block size");
         // }
         return totalQueryCompareSize;
+    }
+
+    void postSearch() {
+        if(cut) {
+            MPI_Send(skipRates.data(), info.blockCount, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD); 
+        }
     }
 
     idx_t totalSkip = 0;
@@ -388,6 +347,8 @@ public:
 
     std::unique_ptr<Index> index;
     // Index* index;
+
+    double waitTime = 0, searchTime = 0;
 
     // void init(int rank, tribase::Index* index) {
     void init(int rank);
@@ -547,5 +508,130 @@ public:
 //     }
     
 };
+
+
+class GroupWorker {
+private:
+public:
+    struct InitInfo {
+        size_t d, block_dim, workerCount;
+        size_t nlist;
+        size_t blockCount, nprobe, nb;
+        idx_t presumeBlockDistancesSize;
+        size_t groupCount;
+        size_t teamCount;
+        size_t startIVFId, ivfCount;
+
+        InitInfo(size_t d, size_t block_dim, size_t workerCount, size_t nlist, size_t blockCount, size_t nprobe,
+                 size_t nb, idx_t presumeBlockDistancesSize)
+            : d(d),
+              block_dim(block_dim),
+              workerCount(workerCount),
+              nlist(nlist),
+              blockCount(blockCount),
+              nprobe(nprobe),
+              nb(nb),
+              presumeBlockDistancesSize(presumeBlockDistancesSize)
+              {}
+        InitInfo() : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0), presumeBlockDistancesSize(0)  {}
+        void print() {
+            cout << GREEN << "InitInfo:[";
+            cout << "d:" << d;
+            cout << ",nlist:" << nlist;
+            cout << ",nprobe:" << nprobe;
+            cout << ",worker:" << workerCount;
+            cout << ",block_dim:" << block_dim;
+            cout << ",nb:" << nb;
+            cout << ",presume:" << presumeBlockDistancesSize / 1000000000 << "GB";
+            cout << "]";
+            cout << endl;
+        }
+    };
+    // 代表一次搜索请求中需要包含的信息
+
+    size_t rank = 0;
+    size_t blockSize = 0;
+    size_t nq = 0, k = 0;
+
+    std::unique_ptr<size_t[]> listSizes;         // nlist个聚类的向量数
+    std::unique_ptr<float[]> querys;             // nq个查询向量, 维度是block_dim
+    std::unique_ptr<idx_t[]> blockSearchOrder;   // search block的顺序，第i个元素是第i个要进行search的blockId
+    std::unique_ptr<idx_t[]> listidqueries;      // nq * nprobe 查询向量相近的聚类id
+    std::unique_ptr<idx_t[]> queryCompareSize;  // nq * nprobe 查询向量相近的聚类id
+    // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
+    std::unique_ptr<idx_t[]> queryCompareSizePreSum;
+
+    vector<std::unique_ptr<float[]>> distanceHeap;
+    vector<std::unique_ptr<idx_t[]>> idHeap;
+
+    vector<std::unique_ptr<float[]>> distancesForBlocks;
+    size_t blockDistancesSize;
+    double waitTime = 0, searchTime = 0;
+    size_t presumeNq = 10000, presumeK = 100;
+    
+
+    // idx_t presumeBlockDistancesSize;
+    InitInfo info;
+
+    void addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer);
+
+    // MPI_Comm worker_comm;
+
+    //vector的每一个元素对应一个block
+    vector<vector<MPI_Request>> disRequests;
+    vector<MPI_Request> sendRequests;
+    vector<MPI_Request> sendDistanceRequests;
+    vector<MPI_Request> sendIdRequests;
+    
+    std::unique_ptr<idx_t[]> sendNextWorker; //接受到blockId为i的块的时候，应该发送给rank为sendNextWorker[i]的机器, sendNextWorker[i]=0说明可以发给master
+    std::unique_ptr<idx_t[]> recvPrevWorker; //blockId为i的块应该从rank为recvPrevWorker[i]的机器接收，如果recvPrevWorker[i] = 0, 说明不需要接收, 直接可以算
+
+    MyStopWatch uniWatch;
+
+    std::unique_ptr<Index> index;
+
+    bool blockSend = false;
+    bool cut = false;
+
+    std::unique_ptr<float[]> heapTops;
+
+    vector<double> skipRates;
+
+
+    void init(int rank, bool blockSend);
+    bool shouldSendHeap(size_t blockId) {
+        return  sendNextWorker[blockId] == 0;
+    }
+   
+    void addQuerys(const float* querys, size_t nq) {
+        // this->querys = std::make_unique<float[]>(nq * info.block_dim);
+        copy_n_partial_vector(querys, this->querys.get(), info.d, info.block_dim, info.block_dim * (rank - 1), nq);
+    }
+
+    void search(bool cut);
+
+    idx_t getTotalQueryCompareSize(size_t blockId) {
+        size_t queryStart = blockId * blockSize;
+        idx_t totalQueryCompareSize = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
+        // if((double)queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart] > INT_MAX) {
+        //     cerr << RED << "increase block size" << RESET << endl;
+        //     throw std::invalid_argument("increase block size");
+        // }
+        return totalQueryCompareSize;
+    }
+
+    void postSearch() {
+        if(cut) {
+            MPI_Send(skipRates.data(), info.blockCount, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD); 
+        }
+    }
+
+    idx_t totalSkip = 0;
+    idx_t totalCompare = 0;
+
+    void searchBlock(size_t blockId, bool cut);
+    
+};
+
 }  // namespace tribase
 #endif

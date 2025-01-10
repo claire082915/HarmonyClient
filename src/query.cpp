@@ -25,7 +25,7 @@ bool str_lower_equal(const std::string& a, const std::string& b) {
 
 
 
-int workerMain(int rank, bool cut, bool divideIVF) {
+int workerMain(int rank, bool cut, bool divideIVF, bool blockSend) {
     // cout << "node(" << rank << ") main()" << endl;
     // MPI_Bcast(data.data(), array_size, MPI_INT, 0, MPI_COMM_WORLD);
     
@@ -35,8 +35,10 @@ int workerMain(int rank, bool cut, bool divideIVF) {
         worker.search();
     } else {
         Worker node;
-        node.init(rank);
+        node.init(rank, blockSend);
+        node.uniWatch.print("workerMain", false);
         node.search(cut);
+        node.postSearch();
     }
     // for(size_t i = 0; i < node.info.blockCount; i++) {
     //     node.searchBlock(i);
@@ -121,6 +123,25 @@ int main(int argc, char* argv[]) {
     program.add_argument("--divideIVF")
         .default_value(false)
         .implicit_value(true);
+    program.add_argument("--period")
+        .default_value(false)
+        .implicit_value(true);
+    program.add_argument("--inBalance")
+        .default_value(false)
+        .implicit_value(true);
+    program.add_argument("--blockSend")
+        .default_value(false)
+        .implicit_value(true);
+    program.add_argument("--fullWarmUp")
+        .default_value(false)
+        .implicit_value(true);
+    program.add_argument("--block")
+        .help("number of blocks")
+        .default_value(0ul)
+        .action([](const std::string& value) -> size_t { return std::stoul(value); });
+
+
+
 
     try {
         program.parse_args(argc, argv);
@@ -144,19 +165,20 @@ int main(int argc, char* argv[]) {
     bool disableOrderOptimize = program.get<bool>("disableOrderOpt");
     bool cut = program.get<bool>("cut");
     bool run_faiss = program.get<bool>("run_faiss");
+    bool period = program.get<bool>("period");
+    bool inBalance = program.get<bool>("inBalance");
+    bool blockSend = program.get<bool>("blockSend");
+    bool fullWarmUp = program.get<bool>("fullWarmUp");
 
-    // char* job_id = std::getenv("SLURM_JOB_ID");
-    // char* node_list = std::getenv("SLURM_JOB_NODELIST");
-    // char* num_nodes = std::getenv("SLURM_NNODES");
+    char* job_id = std::getenv("SLURM_JOB_ID");
+    char* node_list = std::getenv("SLURM_JOB_NODELIST");
+    char* num_nodes = std::getenv("SLURM_NNODES");
     
-    char* job_id = "no";
-    char* node_list = "no";
-    char* num_nodes = "no";
 
     if (rank != 0) {
         if(!run_faiss) {
             MPI_Barrier(MPI_COMM_WORLD);
-            workerMain(rank, cut, divideIVF);
+            workerMain(rank, cut, divideIVF, blockSend);
         }
     } else {
         if (job_id && node_list && num_nodes) {
@@ -220,11 +242,13 @@ int main(int argc, char* argv[]) {
         bool cache = program.get<bool>("cache");
         float sub_nprobe_ratio = program.get<float>("sub_nprobe_ratio");
 
+        std::string inBalanceString = inBalance ? "InBalance" : "";
         std::string base_path = std::format("{}/{}/origin/{}_base.{}", benchmarks_path, dataset, dataset, input_format);
         std::string query_path =
             std::format("{}/{}/origin/{}_query.{}", benchmarks_path, dataset, dataset, input_format);
         std::string groundtruth_path =
-            std::format("{}/{}/result/groundtruth_{}.{}", benchmarks_path, dataset, k, output_format);
+            // std::format("{}/{}/result/groundtruth_{}.{}", benchmarks_path, dataset, k, output_format);
+            std::format("{}/{}/result/groundtruth_{}{}.{}", benchmarks_path, dataset, k, inBalanceString, output_format);
         std::string log_path;
         std::string log_path_simple;
         std::string tmp_csv_path = program.get<std::string>("csv");
@@ -235,7 +259,8 @@ int main(int argc, char* argv[]) {
                 log_path = std::format("{}/{}/result/log.csv", benchmarks_path, dataset);
                 log_path_simple = std::format("{}/{}/result/log_simple.csv", benchmarks_path, dataset);
             } else {
-                log_path = std::format("{}/{}/result/log_faiss.csv", benchmarks_path, dataset);
+                // log_path = std::format("{}/{}/result/log_faiss.csv", benchmarks_path, dataset);
+                log_path = std::format("{}/{}/result/log_faiss{}.csv", benchmarks_path, dataset, inBalanceString);
             }
         }
 
@@ -338,6 +363,20 @@ int main(int argc, char* argv[]) {
 
         // init query set
         auto [query, nq, _] = loadXvecs(query_path);
+        srand(time(0));
+        if(inBalance) {
+            cout << YELLOW << "InBalance Query Set" << RESET << endl;
+            for(int q = 1; q < nq; q++) {
+                copy_n(query.get(), d, query.get() + q * d);
+                float random_value = rand() / (float)RAND_MAX * 0.00001;
+                for(int i = q * d; i < q * d + d; i++) {
+                    query[i] += random_value;
+                }
+            }
+            // for(int q = 0; q < nq; q++) {
+            //     printVector(query.get() + q * d, d, BLUE);
+            // }
+        }
 
 
         cout << YELLOW << std::format("[dim:{}, nb:{}, nq:{}, k:{}, worker:{}]", d, nb, nq, k, workerCount) << RESET << endl; 
@@ -372,7 +411,8 @@ int main(int argc, char* argv[]) {
 
         // init faiss_time file
         std::string faiss_time_path =
-            std::format("{}/{}/result/faiss_result_nlist_{}.txt", benchmarks_path, dataset, nlist);
+            // std::format("{}/{}/result/faiss_result_nlist_{}.txt", benchmarks_path, dataset, nlist);
+            std::format("{}/{}/result/faiss_result_nlist_{}{}.txt", benchmarks_path, dataset, nlist, inBalanceString);
         std::vector<double> faiss_time(nprobes.size(), 0.0);
         std::ifstream faiss_time_input(faiss_time_path);
         if (faiss_time_input.is_open()) {
@@ -504,6 +544,7 @@ int main(int argc, char* argv[]) {
                 faiss_time_output_writer << dataset << nlist << nprobes[i] << faiss_time[i] << recall << r2
                                          << std::endl;
             }
+            MPI_Finalize();
             return 0;
         }
 
@@ -556,7 +597,7 @@ int main(int argc, char* argv[]) {
             }
             
             double search_time = stopwatch.elapsedSeconds() / loop;
-
+            index.postSearch();
             float recall = calculate_recall(labels, distances, ground_truth_I.get(), ground_truth_D.get(),
                                             nq, k, metric);
             float r2 =
@@ -575,6 +616,9 @@ int main(int argc, char* argv[]) {
             stats.divideIVF = divideIVF;
             stats.cut = cut;
             stats.nodeList = node_list;
+            stats.nb = nb;
+            stats.nq = nq;
+            stats.d = d;
             
             if (recall == 1) {
                 early_stop_flag = true;
@@ -612,23 +656,39 @@ int main(int argc, char* argv[]) {
                     } else {
                         param.mode = Index::SearchMode::ORIGINAL;
                     }
+                    param.period = period;
+                    param.cut = cut;
+                    param.fullWarmUp = fullWarmUp;
+                    auto heapTops = std::make_unique<float[]>(nq); 
+                    if(param.fullWarmUp) {
+                        cout << YELLOW << "Full Warm Up!" << RESET << endl;
+                        param.heapTops = heapTops.get();
+                        for(int q = 0; q < nq; q++){
+                            param.heapTops[q] = ground_truth_D[q * k + k - 1];
+                            // printVector(ground_truth_D.get() + q * k, k, MAG);
+                        }   
+                        // printVector(param.heapTops, nq, BLUE);
+                    }
 
                     if (param.mode != Index::SearchMode::ORIGINAL) {
                         Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
                         stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
                         cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
+                        stat.original_time = oriStat.query_time;
                         stat.print();
-                        stat.myToCsv(log_path, true, dataset);
+                        // stat.myToCsv(log_path, true, dataset);
+                        stat.myToCsv(log_path, true, dataset + inBalanceString);
                     } 
-                    // for(int i = 0; i < 2; i++) {
-                    //     if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
-                    //         std::cout << "Q" << i << " " << std::endl;
-                    //         printVector(distances.get() + i * k, k, BLUE);
-                    //         printVector(distancesB.get() + i * k, k, BLUE);
-                    //         printVector(labels.get() + i * k, k, GREEN);
-                    //         printVector(labelsB.get() + i * k, k, GREEN);
-                    //     }
-                    // }
+                    for(int i = 0; i < nq; i++) {
+                        // if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                        // if(true) {
+                        //     std::cout << "Q" << i << " " << std::endl;
+                        //     printVector(distances.get() + i * k, k, BLUE);
+                        //     printVector(distancesB.get() + i * k, k, BLUE);
+                        //     printVector(labels.get() + i * k, k, GREEN);
+                        //     printVector(labelsB.get() + i * k, k, GREEN);
+                        // }
+                    }
                     std::cout << RESET;
                     // }
                 }

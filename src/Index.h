@@ -33,6 +33,7 @@ class Index {
         DIVIDE_IVF,
         DIVIDE_DIM,
         DIVIDE_DIM_WORKER,
+        DIVIDE_GROUP,
     };
     struct Param {
         bool orderOptimize = true;
@@ -45,6 +46,9 @@ class Index {
         idx_t queryStart;
         idx_t* listidqueries;
         bool cut = false;
+        bool period = false;
+        bool fullWarmUp = false;
+        float* heapTops = nullptr;
     };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
@@ -53,8 +57,9 @@ class Index {
     int single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
                                  Stats* stats, size_t startIVF, size_t ivfCount);
     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
-    void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery, float* heapTop, idx_t* listidqueries);
+    // void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery, float* heapTop, idx_t* listidqueries);
     void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* label);
+    void single_thread_search_group(size_t n, const float* queries, size_t k, float* distances, idx_t* label);
     void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void add(size_t n, const float* codes);
     void add_simple(size_t n, const float* codes);
@@ -66,6 +71,7 @@ class Index {
     void printIndex();
    
     void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param);
+    void postSearch();
     // 其他查询方法的声明
     std::unique_ptr<IVFScanBase> get_scanner(MetricType metric, OptLevel opt_level, size_t k, EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
 
@@ -100,8 +106,8 @@ class Index {
     // std::vector<std::unique_ptr<float[]>> blockDistancesBuffer;
     std::vector<std::vector<idx_t>> workerSearchBlockOrder; //每一个worker对应的计算block的id排序
     std::vector<std::vector<idx_t>> blockSearchedOrder; 
-    size_t warmUpSearchList = 0;
-    size_t warmUpSearchListSize = 0;
+    size_t warmUpSearchList = 0; //取多少个聚类
+    size_t warmUpSearchListSize = 0; //每个聚类取多少个向量
 
     idx_t presumeNq = 10000, presumeK = 1000;
     std::vector<std::unique_ptr<float[]>> distancesHeapBuffer;
@@ -111,7 +117,11 @@ class Index {
     bool blockMalloc = false; //distanceForNQuerys是不是只是一个block的，还是所有block的
 
     std::unique_ptr<float[]> originalQuery;
-    std::unique_ptr<float[]> heapTops;
+    // std::unique_ptr<float[]> heapTops;
+
+    // std::unique_ptr<float[]> distanceHeapForBlock;
+    // std::unique_ptr<idx_t[]> idHeapForBlock;
+    Param* param;
 };
 
 }  // namespace tribase
