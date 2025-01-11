@@ -49,6 +49,8 @@ class Index {
         bool period = false;
         bool fullWarmUp = false;
         float* heapTops = nullptr;
+
+        size_t groupCount, teamCount, teamSize;
     };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
@@ -59,18 +61,18 @@ class Index {
     void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
     // void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery, float* heapTop, idx_t* listidqueries);
     void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* label);
-    void single_thread_search_group(size_t n, const float* queries, size_t k, float* distances, idx_t* label);
+    void search_group_master(size_t n, const float* queries, size_t k, float* distances, idx_t* label);
     void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
     void add(size_t n, const float* codes);
     void add_simple(size_t n, const float* codes);
-    Stats search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio = 1, Param *param = nullptr);
+    Stats search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio = 1);
     void save_index(std::string path) const;
     void load_index(std::string path);
     void load_SPANN(std::string path);
     // void initWorkers(size_t workerCount, float* querys, size_t querySize, size_t blockCount, size_t nb);
     void printIndex();
    
-    void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param);
+    void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param* param);
     void postSearch();
     // 其他查询方法的声明
     std::unique_ptr<IVFScanBase> get_scanner(MetricType metric, OptLevel opt_level, size_t k, EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
@@ -84,7 +86,7 @@ class Index {
     size_t nprobe;
     size_t workerCount;
     size_t blockCount;
-    size_t blockSize;
+    size_t blockSize, groupSize;
     MetricType metric;
     OptLevel opt_level;
     OptLevel added_opt_level;
@@ -122,6 +124,10 @@ class Index {
     // std::unique_ptr<float[]> distanceHeapForBlock;
     // std::unique_ptr<idx_t[]> idHeapForBlock;
     Param* param;
+
+    SearchOrder groupSearchOrder, blockSearchOrder;
+    vector<size_t> beginIVFs;
+    vector<size_t> ivfCounts;
 };
 
 }  // namespace tribase

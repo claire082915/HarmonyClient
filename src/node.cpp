@@ -823,7 +823,7 @@ void BaseWorker::single_thread_search_simple(size_t n, const float* queries, siz
         // w.print(format("q {}", i));
     }
 }
-void GroupWorker::init() {
+void GroupWorker::init(int rank, bool blockSend) {
     MyStopWatch watch(false);
 
     this->rank = rank;
@@ -837,10 +837,10 @@ void GroupWorker::init() {
 
     // IVF的大小，IVF的向量表示
     listSizes = std::make_unique<size_t[]>(info.nlist);
-    MPI_Recv(listSizes.get(), info.ivfCount * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(listSizes.get(), info.nlist * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 #pragma omp parallel for
-    for (size_t i = 0; i < info.nlist; i++) {
+    for (size_t i = info.startIVFId; i < info.startIVFId + info.ivfCount; i++) {
         index->lists[i].reset(listSizes[i], info.block_dim, 0);
     }
     watch.print("lists");
@@ -851,6 +851,352 @@ void GroupWorker::init() {
     for (size_t i = info.startIVFId; i < info.startIVFId + info.ivfCount; i++) {
         MPI_Recv(index->lists[i].candidate_codes.get(), listSizes[i] * info.block_dim , MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
+
+    groupSearchOrder = SearchOrder(info.teamCount, info.groupCount, true);
+    blockSearchOrder = SearchOrder(info.teamSize, info.blockCount, true);
+        // groupSearchOrder.print();
+        // blockSearchOrder.print();
+
+    //malloc内存
+
+    index->originalQuery = std::make_unique<float[]>(presumeNq * info.d);
+    this->querys = std::make_unique<float[]>(presumeNq * info.block_dim);
+    listidqueries = std::make_unique<idx_t[]>(presumeNq * info.nprobe);  // 最近的nprobe个聚类中心的id
+    // index->heapTops = std::make_unique<float[]>(presumeNq);
+    heapTops = std::make_unique<float[]>(presumeNq);
+    queryCompareSize = std::make_unique<idx_t[]>(presumeNq);
+    queryCompareSizePreSum = std::make_unique<idx_t[]>(presumeNq + 1);
+    distanceHeap = vector<std::unique_ptr<float[]>>(info.blockCount);
+    idHeap = vector<std::unique_ptr<idx_t[]>>(info.blockCount);
+    for (size_t i = 0; i < info.blockCount; i++) {
+        distanceHeap[i] = std::make_unique<float[]>(presumeK * presumeNq);
+        idHeap[i] = std::make_unique<idx_t[]>(presumeK * presumeNq);
+        init_result(METRIC_L2, presumeNq * presumeK, distanceHeap[i].get(), idHeap[i].get());
+    }
     
+    blockDistancesSize = 2 * presumeNq / info.blockCount * info.nb;
+    distancesForBlocks = vector<std::unique_ptr<float[]>>(info.blockCount);
+    for (size_t i = 0; i < info.blockCount; i++) {
+        distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
+    }
+
+
+    disRequests = vector<vector<MPI_Request>>(info.blockCount);
+    for(int i = 0; i < disRequests.size(); i++) {
+        disRequests[i] = vector<MPI_Request>(1);
+    }
+    sendRequests = vector<MPI_Request>(info.blockCount);
+    sendDistanceRequests = vector<MPI_Request>(info.blockCount);
+    sendIdRequests = vector<MPI_Request>(info.blockCount);
+
+    skipRates = vector<double>(info.blockCount, 0);
+
+    cout << "finish init" << endl;
+
+
+}
+
+void GroupWorker::receiveQuery() {
+
+    MPI_Barrier(MPI_COMM_WORLD); //对应preSearch最后的barrier
+
+    uniWatch = MyStopWatch(true, "uniWatch", MAG);
+    uniWatch.print(format("node {} cross barrier", rank), false);
+    // nq, querys
+    MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&k, sizeof(k), MPI_BYTE, 0, MPI_COMM_WORLD);
+    if((double)nq * k > presumeK * presumeNq) {
+        cerr << "presumeNq * k is too small" << endl;
+        exit(1);
+    }
+    if(nq > presumeNq) {
+        cerr << "presumeNq is too small" << endl;
+        exit(1);
+    }
+    uniWatch.print(format("node {} nq k {} ", rank, k), false);
+
+    MPI_Bcast(index->originalQuery.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    addQuerys(index->originalQuery.get(), nq);
+
+    uniWatch.print(format("node {} querys", rank), false);
+
+    MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
+
+    uniWatch.print(format("node {} listidqueries", rank), false);
+
+    // queryCompareSize,queryCompareSizePreSum
+    MPI_Recv(queryCompareSize.get(), nq, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    // queryCompareSizePreSum = std::make_unique<size_t[]>(nq + 1);
+    MPI_Recv(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    uniWatch.print(format("node {} queryCompareSize", rank), false);
+    // printVector(queryCompareSize.get(), nq, BLUE);
+    // printVector(queryCompareSizePreSum.get(), nq + 1, GREEN);
+
+    groupSize = nq / info.groupCount;        
+    blockSize = groupSize / info.blockCount;
+
+    // cout << "finish receive query" << endl;
+    uniWatch.print(format("node {} finish Receving", rank), false);
+
+}
+void GroupWorker::search(bool cut) {
+
+    this->cut = cut;
+
+    MyStopWatch totalWatch(true, "Total Watch");
+
+    // 初始最大堆
+    MPI_Bcast(heapTops.get(), nq, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    uniWatch.print(format("node {} heapTops", rank), false);
+
+    for(int i = 0; i < info.groupCount; i++) {
+        size_t groupId = groupSearchOrder.workerSearchOrder[info.teamId][i];
+        //如果应该接收更新的heapTops
+        size_t sender = groupSearchOrder.recvPrevWorker[info.teamId][groupId];
+        if(sender != 0) {
+            MPI_Recv(heapTops.get() + groupId * groupSize, groupSize, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            // MPI_Recv(listSizes.get(), info.nlist * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+
+        searchGroup(groupId);
+
+        reset();
+    }
+
+    totalWatch.print(format("node {} Finish Search", rank));
+
+    
+}
+size_t GroupWorker::getSender(idx_t groupId, idx_t blockId) {
+    if(blockSearchOrder.getRecvPrevWorker(info.rankInsideTeam, blockId) == 0) {
+        return 0;
+    }
+    return blockSearchOrder.getRecvPrevWorker(info.rankInsideTeam, blockId) + (info.teamId - 1) * info.teamSize;
+}
+size_t GroupWorker::getReceiver(idx_t groupId, idx_t blockId) {
+    if(blockSearchOrder.getSendNextWorker(info.rankInsideTeam, blockId) == 0) {
+        return 0;
+    }
+    return blockSearchOrder.getSendNextWorker(info.rankInsideTeam, blockId) + (info.teamId - 1) * info.teamSize;
+}
+
+void GroupWorker::searchGroup(idx_t groupId) 
+{
+    // cout << format("node {} groupid {}", rank, groupId) << endl;
+    uniWatch.print(format("node {} searchGroup {}", rank, groupId), false);
+    MyStopWatch groupWatch(true, "Group search watch");
+   
+    int searchedBlockCount = 0;
+    vector<bool> isBlockSearched = vector<bool>(info.blockCount);
+
+    //先给可以算的分配内存
+    // for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
+    //     if(blockSearchOrder.getRecvPrevWorker(info.rankInsideTeam, blockId) == 0) {
+    //         //直接标记使用
+    //         // distanceBufferPool->use(blockId);
+    //     }
+    // }
+    for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
+        size_t sender = getSender(groupId, blockId);
+        if(sender != 0) {
+            MPI_Irecv(distancesForBlocks[blockId].get(), getBlockQueryCompareSize(groupId, blockId), MPI_FLOAT, sender, getTag(groupId, blockId, info.blockCount), MPI_COMM_WORLD, &disRequests[blockId][0]);
+            // MPI_Irecv(distanceBufferPool->getBuffer(blockId), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
+            // bool suc = distanceBufferPool->IRecv(blockId, getTotalQueryCompareSize(blockId), sender, disRequests[blockId]);
+            // if(!suc) {
+            //     break;
+            // }
+            // cout << format("node({}) waiting for block({}) from node({})", rank, blockId, sender) << endl;
+        } 
+    }
+
+    //不断查
+    MyStopWatch watch(true);
+    idx_t failCount = 0;
+    while(searchedBlockCount < info.blockCount)
+    for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
+        if(isBlockSearched[blockId]) {
+            continue;
+        }
+        size_t sender = getSender(groupId, blockId);
+        if(sender == 0) {
+
+            searchBlock(blockId, cut, groupId);
+            isBlockSearched[blockId] = true;
+            searchedBlockCount++;
+
+            watch.reset();
+            if(blockSend && !shouldSendHeap(blockId)) {
+                MPI_Wait(&sendRequests[blockId], MPI_STATUS_IGNORE);
+                waitTime += watch.watch.elapsedSeconds();
+                watch.print(format("node({}) block {} MPI_Wait", rank, blockId));
+            }
+
+        } else {
+            int isReceived;
+            MPI_Status stat;
+            bool testFail = false;
+            for(auto& req : disRequests[blockId]) {
+                MPI_Test(&req, &isReceived, &stat);
+                if(!isReceived) {
+                    testFail = true;
+                    break;
+                }
+            }
+            if(!testFail) {
+                // cout << GREEN << format("node({}) received block({}) from node({})",rank, blockId, stat.MPI_SOURCE) << RESET << endl;
+                waitTime += watch.watch.elapsedSeconds();
+                // watch.print(format("node {} waiting , now received block {} fail {}", rank, blockId, failCount));
+                // uniWatch.print(format("node {} 接收到了 block {} Test失败次数 {}", rank, blockId, failCount), false);
+
+                searchBlock(blockId, cut, groupId);
+
+                searchedBlockCount++;
+                isBlockSearched[blockId] = true;
+                failCount = 0;
+
+                watch.reset();
+                if(blockSend && !shouldSendHeap(blockId)) {
+                    MPI_Wait(&sendRequests[blockId], MPI_STATUS_IGNORE);
+                    waitTime += watch.watch.elapsedSeconds();
+                    watch.print(format("node({}) block {} MPI_Wait", rank, blockId));
+                }
+            } else {
+                failCount++;
+                usleep(100);
+            }
+        }
+    }
+    double totalTime = groupWatch.watch.elapsedSeconds();
+    double otherTime = totalTime - waitTime - searchTime;
+    groupWatch.print(format("Group {} Finished node({}), total skip:{:.1f}%, waitTime {} {:.2f}% searchTime {} {:.2f}% otherTime {} {:.2f}%", 
+        groupId, rank, (double)totalSkip / totalCompare * 100, waitTime, 100 * waitTime / totalTime, searchTime, 100 * searchTime / totalTime, otherTime, 100 * otherTime / totalTime));
+
+    // if(!blockSend) {
+    //     for(size_t blockId = 0; blockId < info.blockCount; blockId++) {
+    //         if(!shouldSendHeap(blockId)) {
+    //             MPI_Wait(&sendRequests[blockId], MPI_STATUS_IGNORE);
+    //         }
+    //     }
+    // } 
+}
+
+void GroupWorker::searchBlock(size_t blockId, bool cut, size_t groupId) {
+    // uniWatch.print(format("searchBlock 搜索开始 node({}) group({}) block({})", rank, groupId, blockId), false);
+    MyStopWatch searchWatch(true, "searchBlock");
+
+
+    // float* distanceBuffer = distanceBufferPool->getBuffer(blockId);
+    float* distanceBuffer = distancesForBlocks[blockId].get();
+
+    size_t queryStart = getQueryOffset(groupId, blockId);
+    idx_t totalQueryCompareSize = getBlockQueryCompareSize(groupId,blockId);
+        
+    // cout << RED << rank << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
+    //      << endl;
+
+
+    if (totalQueryCompareSize > info.presumeBlockDistancesSize) {
+        cerr << "Error blockDistancesSize too small" << endl;
+        exit(1);
+    }
+
+    size_t skip = 0;
+
+    size_t nt = std::min(static_cast<size_t>(omp_get_max_threads()), blockSize);
+#pragma omp parallel for num_threads(nt) reduction(+:skip)
+    for (size_t q = queryStart; q < queryStart + blockSize; q++) {
+        size_t queryOffset =
+            queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
+
+        float* simi = distanceHeap[blockId].get() + k * (q - queryStart);
+        idx_t* idxi = idHeap[blockId].get() + k * (q - queryStart);
+
+        size_t curDistancePosition = 0;  // 在一个查询向量的结果内
+
+        for (size_t i = 0; i < info.nprobe; i++) {
+
+            idx_t ivfId = listidqueries[q * info.nprobe + i];
+
+            if(ivfId >= info.startIVFId && ivfId < info.startIVFId + info.ivfCount) {
+                for (size_t v = 0; v < listSizes[ivfId]; v++) {
+                    if(cut) {
+                        // if(distancesForBlocks[blockId][queryOffset + curDistancePosition] == INFINITY) {
+                        if(distanceBuffer[queryOffset + curDistancePosition] == INFINITY) {
+                            skip++;
+                        } else {
+                            float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
+                                                                    index->lists[ivfId].get_candidate_codes() + v * info.block_dim,
+                                                                    info.block_dim);
+                            // cout << " " << queryOffset + curDistancePosition  << endl;
+                            
+                            // assert(queryOffset + curDistancePosition < totalQueryCompareSize);
+                            distanceBuffer[queryOffset + curDistancePosition] += dis;
+                            if (distanceBuffer[queryOffset + curDistancePosition] > heapTops[q]) {
+                                distanceBuffer[queryOffset + curDistancePosition] = INFINITY;
+                            } else {
+                                if(shouldSendHeap(blockId)) {
+                                    if (distanceBuffer[queryOffset + curDistancePosition] < simi[0]) {
+                                        //比堆顶
+                                        heap_replace_top<METRIC_L2>(k, simi, idxi, distanceBuffer[queryOffset + curDistancePosition], index->lists[ivfId].get_candidate_id()[v]);
+                                    }
+                                } 
+                            }
+                        }
+                    } else {
+                        float dis = calculatedEuclideanDistance(querys.get() + q * info.block_dim,
+                                                                index->lists[ivfId].get_candidate_codes() + v * info.block_dim,
+                                                                info.block_dim);
+                        // cout << " " << queryOffset + curDistancePosition  << endl;
+                        assert(queryOffset + curDistancePosition < totalQueryCompareSize);
+                        distanceBuffer[queryOffset + curDistancePosition] += dis;
+                        if(shouldSendHeap(blockId)) {
+                            if (distanceBuffer[queryOffset + curDistancePosition] < simi[0]) {
+                                //比堆顶
+                                // cout << format("q {} replace {} {} top {}", q, distanceBuffer[queryOffset + curDistancePosition], index->lists[ivfId].get_candidate_id()[v], simi[0]) << endl;
+                                heap_replace_top<METRIC_L2>(k, simi, idxi, distanceBuffer[queryOffset + curDistancePosition], index->lists[ivfId].get_candidate_id()[v]);
+                            }
+                        }
+                    }
+                    curDistancePosition++;
+                    
+                }
+            }
+        }
+        // cout << curDistancePosition << " " << queryCompareSize[q] << endl;
+        assert(curDistancePosition == queryCompareSize[q]);
+        sort_result(METRIC_L2, k, simi, idxi);
+    }
+
+    totalSkip += skip;
+    skipRates[blockId] = (double)skip / totalQueryCompareSize * 100;
+    totalCompare += totalQueryCompareSize;
+
+    searchTime += searchWatch.watch.elapsedSeconds();
+    // searchWatch.print(format("node({}) search 主循环 block({}) skip:{:.1f}%", rank, blockId, (double)skip / totalQueryCompareSize * 100));
+
+    // uniWatch.print(format("worker({}) -> block({}) -> worker({}) 传输开始", rank, blockId, sendNextWorker[blockId]), false);
+    MyStopWatch watch(true);
+    int tag = GroupWorker::getTag(groupId, blockId, info.blockCount);
+    if(shouldSendHeap(blockId)) {
+        MPI_Send(distanceHeap[blockId].get(), blockSize * k, MPI_FLOAT, 0, tag, MPI_COMM_WORLD);
+        MPI_Send(idHeap[blockId].get(), blockSize * k, MPI_INT64_T, 0, tag, MPI_COMM_WORLD);
+        // init_result(METRIC_L2, blockSize * k, distanceHeap.get(), idHeap.get());
+    } else {
+        MPI_Isend(distanceBuffer, totalQueryCompareSize, MPI_FLOAT, getReceiver(groupId, blockId), tag, MPI_COMM_WORLD, &sendRequests[blockId]);
+    }
+    waitTime += watch.watch.elapsedSeconds();
+    // watch.print(format("worker({}) -> block({}) -> worker({}) 传输时间", rank, blockId, getReceiver(groupId, blockId)));
+
+
+    // distanceBufferPool->releaseBuffer(blockId); 不能直接release, 要检查buffer是不是已经发送完毕了
+
+
+    // searchWatch.print(format("node({}) search finish block({}) skip:{:.1f}%", rank, blockId, (double)skip / totalQueryCompareSize * 100));
+
+   
+
+    // uniWatch.print(format("finish node({}) search block({}) skip:{:.1f}%", rank, blockId, (double)skip / totalQueryCompareSize * 100), false);
+
 }
 }  // namespace tribase

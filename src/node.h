@@ -12,6 +12,7 @@
 #include "utils.h"
 #include "heap.hpp"
 #include "IVFScan.hpp"
+#include "order.h"
 
 namespace tribase {
 
@@ -518,44 +519,69 @@ public:
         size_t nlist;
         size_t blockCount, nprobe, nb;
         idx_t presumeBlockDistancesSize;
-        size_t groupCount;
-        size_t teamCount;
+        size_t groupCount, teamCount, teamSize;
         size_t startIVFId, ivfCount;
+        size_t teamId, rankInsideTeam;
 
-        InitInfo(size_t d, size_t block_dim, size_t workerCount, size_t nlist, size_t blockCount, size_t nprobe,
-                 size_t nb, idx_t presumeBlockDistancesSize)
-            : d(d),
-              block_dim(block_dim),
-              workerCount(workerCount),
-              nlist(nlist),
-              blockCount(blockCount),
-              nprobe(nprobe),
-              nb(nb),
-              presumeBlockDistancesSize(presumeBlockDistancesSize)
-              {}
-        InitInfo() : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0), presumeBlockDistancesSize(0)  {}
-        void print() {
-            cout << GREEN << "InitInfo:[";
+        // Constructor with default values for all fields
+        InitInfo(size_t d = 0, size_t block_dim = 0, size_t workerCount = 0, size_t nlist = 0, size_t blockCount = 0,
+                size_t nprobe = 0, size_t nb = 0, idx_t presumeBlockDistancesSize = 0, size_t groupCount = 0,
+                size_t teamCount = 0, size_t teamSize = 0, size_t startIVFId = 0, size_t ivfCount = 0, 
+                size_t teamId = 0, size_t rankInsideTeam = 0)
+            : d(d), block_dim(block_dim), workerCount(workerCount), nlist(nlist), blockCount(blockCount), 
+            nprobe(nprobe), nb(nb), presumeBlockDistancesSize(presumeBlockDistancesSize), groupCount(groupCount), 
+            teamCount(teamCount), teamSize(teamSize), startIVFId(startIVFId), ivfCount(ivfCount), 
+            teamId(teamId), rankInsideTeam(rankInsideTeam) {}
+
+        // Default constructor with all values set to zero
+        // InitInfo()
+        //     : d(0), block_dim(0), workerCount(0), nlist(0), blockCount(0), nprobe(0), nb(0),
+        //     presumeBlockDistancesSize(0), groupCount(0), teamCount(0), teamSize(0), 
+        //     startIVFId(0), ivfCount(0), teamId(0), rankInsideTeam(0) {}
+
+        // Print method
+        void print() const {
+            cout << GREEN << "InitInfo: [";
             cout << "d:" << d;
-            cout << ",nlist:" << nlist;
-            cout << ",nprobe:" << nprobe;
-            cout << ",worker:" << workerCount;
-            cout << ",block_dim:" << block_dim;
-            cout << ",nb:" << nb;
-            cout << ",presume:" << presumeBlockDistancesSize / 1000000000 << "GB";
+            cout << ", nlist:" << nlist;
+            cout << ", nprobe:" << nprobe;
+            cout << ", worker:" << workerCount;
+            cout << ", block_dim:" << block_dim;
+            cout << ", nb:" << nb;
+            cout << ", presume:" << presumeBlockDistancesSize / 1000000000 << "GB"; // Presumed size in GB
+            cout << ", groupCount:" << groupCount;
+            cout << ", teamCount:" << teamCount;
+            cout << ", teamSize:" << teamSize;
+            cout << ", startIVFId:" << startIVFId;
+            cout << ", ivfCount:" << ivfCount;
+            cout << ", teamId:" << teamId;
+            cout << ", rankInsideTeam:" << rankInsideTeam;
             cout << "]";
-            cout << endl;
+            cout << "\033[0m" << endl;  // Reset color after printing
         }
     };
+    
+    struct Group {
+    };
+    static int getTag(size_t groupId, size_t blockId, size_t blockCount) {
+        return groupId * blockCount + blockId;
+    }
+    static int getDistanceHeapTag(size_t groupId) {
+        return groupId * 2;
+    }
+    static int getIdHeapTag(size_t groupId) {
+        return groupId * 2 + 1;
+    }
     // 代表一次搜索请求中需要包含的信息
 
     size_t rank = 0;
     size_t blockSize = 0;
+    size_t groupSize = 0;
     size_t nq = 0, k = 0;
 
     std::unique_ptr<size_t[]> listSizes;         // nlist个聚类的向量数
     std::unique_ptr<float[]> querys;             // nq个查询向量, 维度是block_dim
-    std::unique_ptr<idx_t[]> blockSearchOrder;   // search block的顺序，第i个元素是第i个要进行search的blockId
+    // std::unique_ptr<idx_t[]> blockSearchOrder;   // search block的顺序，第i个元素是第i个要进行search的blockId
     std::unique_ptr<idx_t[]> listidqueries;      // nq * nprobe 查询向量相近的聚类id
     std::unique_ptr<idx_t[]> queryCompareSize;  // nq * nprobe 查询向量相近的聚类id
     // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
@@ -583,8 +609,9 @@ public:
     vector<MPI_Request> sendDistanceRequests;
     vector<MPI_Request> sendIdRequests;
     
-    std::unique_ptr<idx_t[]> sendNextWorker; //接受到blockId为i的块的时候，应该发送给rank为sendNextWorker[i]的机器, sendNextWorker[i]=0说明可以发给master
-    std::unique_ptr<idx_t[]> recvPrevWorker; //blockId为i的块应该从rank为recvPrevWorker[i]的机器接收，如果recvPrevWorker[i] = 0, 说明不需要接收, 直接可以算
+    // std::unique_ptr<idx_t[]> sendNextWorker; //接受到blockId为i的块的时候，应该发送给rank为sendNextWorker[i]的机器, sendNextWorker[i]=0说明可以发给master
+    // std::unique_ptr<idx_t[]> recvPrevWorker; //blockId为i的块应该从rank为recvPrevWorker[i]的机器接收，如果recvPrevWorker[i] = 0, 说明不需要接收, 直接可以算
+    SearchOrder groupSearchOrder, blockSearchOrder;
 
     MyStopWatch uniWatch;
 
@@ -600,24 +627,29 @@ public:
 
     void init(int rank, bool blockSend);
     bool shouldSendHeap(size_t blockId) {
-        return  sendNextWorker[blockId] == 0;
+        return blockSearchOrder.sendNextWorker[info.rankInsideTeam][blockId] == 0;
     }
+    void receiveQuery();
    
     void addQuerys(const float* querys, size_t nq) {
         // this->querys = std::make_unique<float[]>(nq * info.block_dim);
-        copy_n_partial_vector(querys, this->querys.get(), info.d, info.block_dim, info.block_dim * (rank - 1), nq);
+        copy_n_partial_vector(querys, this->querys.get(), info.d, info.block_dim, info.block_dim * (info.rankInsideTeam - 1), nq);
     }
 
     void search(bool cut);
+    
 
-    idx_t getTotalQueryCompareSize(size_t blockId) {
-        size_t queryStart = blockId * blockSize;
+    idx_t getBlockQueryCompareSize(size_t groupId, size_t blockId) {
+        size_t queryStart = getQueryOffset(groupId, blockId);
         idx_t totalQueryCompareSize = queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart];
         // if((double)queryCompareSizePreSum[queryStart + blockSize] - queryCompareSizePreSum[queryStart] > INT_MAX) {
         //     cerr << RED << "increase block size" << RESET << endl;
         //     throw std::invalid_argument("increase block size");
         // }
         return totalQueryCompareSize;
+    }
+    idx_t getQueryOffset(size_t groupId, size_t blockId) {
+        return groupId * groupSize + blockId * blockSize;
     }
 
     void postSearch() {
@@ -629,9 +661,24 @@ public:
     idx_t totalSkip = 0;
     idx_t totalCompare = 0;
 
-    void searchBlock(size_t blockId, bool cut);
     
+    // void print() {
+    //     cout << groupSize << " " << blockSize << endl;
+    // }
+private:
+    void searchGroup(idx_t groupId);
+    void searchBlock(size_t blockId, bool cut, size_t groupId);
+    void reset() {
+        for (size_t i = 0; i < info.blockCount; i++) {
+            init_result(METRIC_L2, blockSize * k, distanceHeap[i].get(), idHeap[i].get());
+        }
+        //distancefornblocks
+    }
+    size_t getSender(idx_t groupId, idx_t blockId);
+    size_t getReceiver(idx_t groupId, idx_t blockId);
 };
+
+
 
 }  // namespace tribase
 #endif

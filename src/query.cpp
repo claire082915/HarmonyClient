@@ -26,23 +26,22 @@ bool str_lower_equal(const std::string& a, const std::string& b) {
 
 
 int workerMain(int rank, bool cut, bool divideIVF, bool blockSend) {
-    // cout << "node(" << rank << ") main()" << endl;
-    // MPI_Bcast(data.data(), array_size, MPI_INT, 0, MPI_COMM_WORLD);
     
-    if(divideIVF) {
-        BaseWorker worker; 
-        worker.init(rank);
-        worker.search();
-    } else {
-        Worker node;
-        node.init(rank, blockSend);
-        node.uniWatch.print("workerMain", false);
-        node.search(cut);
-        node.postSearch();
-    }
-    // for(size_t i = 0; i < node.info.blockCount; i++) {
-    //     node.searchBlock(i);
+    // if(divideIVF) {
+    //     BaseWorker worker; 
+    //     worker.init(rank);
+    //     worker.search();
+    // } else {
+    //     Worker node;
+    //     node.init(rank, blockSend);
+    //     node.uniWatch.print("workerMain", false);
+    //     node.search(cut);
+    //     node.postSearch();
     // }
+    GroupWorker worker;
+    worker.init(rank, blockSend);
+    worker.receiveQuery();
+    worker.search(cut);
     return 0;
 }
 int main(int argc, char* argv[]) {
@@ -135,11 +134,18 @@ int main(int argc, char* argv[]) {
     program.add_argument("--fullWarmUp")
         .default_value(false)
         .implicit_value(true);
-    program.add_argument("--block")
-        .help("number of blocks")
-        .default_value(0ul)
+    program.add_argument("--group")
+        .help("number of group")
+        .default_value(1ul)
         .action([](const std::string& value) -> size_t { return std::stoul(value); });
-
+    program.add_argument("--team")
+        .help("number of team")
+        .default_value(1ul)
+        .action([](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--mode")
+           .help("Choose the mode of operation")
+           .default_value(std::string("original"))
+           .choices("divideIVF", "group", "block", "original"); // Only these three choices are valid
 
 
 
@@ -173,7 +179,58 @@ int main(int argc, char* argv[]) {
     char* job_id = std::getenv("SLURM_JOB_ID");
     char* node_list = std::getenv("SLURM_JOB_NODELIST");
     char* num_nodes = std::getenv("SLURM_NNODES");
+
+    size_t groupCount = program.get<size_t>("group");
+    size_t teamCount = program.get<size_t>("team");
+    size_t teamSize = workerCount / teamCount;
+    size_t blockCount = program.get<size_t>("block");
+
+    std::string mode = program.get<std::string>("--mode");
+    Index::SearchMode searchMode = Index::SearchMode::DIVIDE_GROUP;
+    // if(mode == "original") {
+    //     searchMode = Index::SearchMode::ORIGINAL;
+    //     if(workerCount > 0) {
+    //         cerr << "worker should be 0" << endl;
+    //         return 1;
+    //     }
+    // } else if (mode == "block") {
+    //     searchMode = Index::SearchMode::DIVIDE_DIM;
+    // } else if (mode == "group") {
+    //     searchMode = Index::SearchMode::DIVIDE_GROUP;
+    // } else if (mode == "divideIVF") {
+    //     searchMode = Index::SearchMode::DIVIDE_IVF;
+    // }
+
+    if(workerCount % teamCount != 0) {
+        cerr << "worker should divide team count" << endl;
+        return 1;
+    }
+    if(groupCount < teamCount) {
+        cerr << "groupCount < teamCount" << endl;
+        return 1;
+    }
+    // if(workerCount > 0) {
+    //     if(groupCount > 0) {
+    //         searchMode = Index::SearchMode::DIVIDE_GROUP;
+    //         if(teamCount <= 0 || blockCount <= 0 || workerCount <= 0) {
+    //             cerr << "provide --team and --block and workers" << endl;
+    //             exit(1);
+    //         }
+    //     } else if(divideIVF) {
+    //         searchMode = Index::SearchMode::DIVIDE_IVF;
+    //     } else if(blockCount > 0) {
+    //         searchMode = Index::SearchMode::DIVIDE_DIM;
+    //     }
+    // } else {
+    //     searchMode = Index::SearchMode::ORIGINAL;
+    // }
     
+    // bool groupVersion = groupCount > 0; 
+    // bool block_version = (blockCount > 0);
+    // if (blockCount > 0 && (blockCount != 0 && workerCount == 0 || blockCount == 0 && workerCount != 0)) {
+    //     throw std::invalid_argument("block count and node cound must be provided at the same time");
+    // }
+
 
     if (rank != 0) {
         if(!run_faiss) {
@@ -217,14 +274,9 @@ int main(int argc, char* argv[]) {
         bool early_stop = program.get<bool>("early_stop");
         // bool block_version = program.get<bool>("block");
         // size_t nodeCount = program.get<size_t>("node");
-        size_t blockCount = program.get<size_t>("block");
         // bool sync = program.get<bool>("sync");
         
 
-        bool block_version = (blockCount > 0);
-        if (block_version && (blockCount != 0 && workerCount == 0 || blockCount == 0 && workerCount != 0)) {
-            throw std::invalid_argument("block count and node cound must be provided at the same time");
-        }
         std::cout << BLUE << "number of nodes : " << workerCount << RESET << std::endl;
         if (early_stop && (ratios[0] != 1 || ratios.size() != 1)) {
             throw std::invalid_argument("early_stop is only allowed when ratios is 1.0");
@@ -272,7 +324,7 @@ int main(int argc, char* argv[]) {
         size_t nb, d;
         std::unique_ptr<float[]> base = nullptr;
         std::tie(nb, d) = loadXvecsInfo(base_path);
-
+        
         // 不用管
         if (program.get<bool>("dataset_info")) {
             auto [nq, _] = loadXvecsInfo(query_path);
@@ -363,6 +415,23 @@ int main(int argc, char* argv[]) {
 
         // init query set
         auto [query, nq, _] = loadXvecs(query_path);
+
+        cout << YELLOW << std::format("[dim:{}, nb:{}, nq:{}, k:{}, worker:{}]", d, nb, nq, k, workerCount) << RESET << endl; 
+
+        if(blockCount > 0) {
+            if (d % teamSize != 0) {
+                cerr << RED << "Error: d % worker must be 0" << RESET << endl;
+                return 1;
+            }
+            if (nq % (groupCount * blockCount) != 0) {
+                cerr << RED << "Error: nq % block must be 0" << RESET << endl;
+                return 1;
+            }
+            if(divideIVF) {
+                cerr << RED << "divideIVF and block cannot be provided together" << RESET <<endl;
+                return 1;
+            }
+        }
         srand(time(0));
         if(inBalance) {
             cout << YELLOW << "InBalance Query Set" << RESET << endl;
@@ -379,31 +448,12 @@ int main(int argc, char* argv[]) {
         }
 
 
-        cout << YELLOW << std::format("[dim:{}, nb:{}, nq:{}, k:{}, worker:{}]", d, nb, nq, k, workerCount) << RESET << endl; 
 
-        if(workerCount > 0 && !block_version && !divideIVF) {
+        if(workerCount > 0 && (run_faiss)) {
             cerr << RED << "Error: worker > 0" << RESET << endl;
             return 1;
         }
-        if (block_version) {
-            if (d % workerCount != 0) {
-                cerr << RED << "Error: d % worker must be 0" << RESET << endl;
-                return 1;
-            }
-            if (nq % blockCount != 0) {
-                cerr << RED << "Error: nq % block must be 0" << RESET << endl;
-                return 1;
-            }
-            // double blockResultSize = (double)nq / blockCount * nb;
-            // if(blockResultSize > INT_MAX) {
-            //     cerr << RED << "blockResultSize" << blockResultSize << ", too few blocks" << RESET <<endl;
-            //     return 1;
-            // }
-            if(divideIVF) {
-                cerr << RED << "divideIVF and block cannot be provided together" << RESET <<endl;
-                return 1;
-            }
-        }
+     
 
         // init groundtruth
         std::unique_ptr<idx_t[]> ground_truth_I = std::make_unique<idx_t[]>(k * nq);
@@ -564,9 +614,9 @@ int main(int argc, char* argv[]) {
             nlist = static_cast<size_t>(std::sqrt(nb));
             index = Index(d, nlist, 0, metric, added_opt_levels, OPT_ALL, sub_nlist, sub_nprobe, verbose);
             index.train(nb, base.get());
-            if (block_version) {
-                index.add_simple(nb, base.get());
-            } else
+            // if (block_version) {
+            //     index.add_simple(nb, base.get());
+            // } else
                 index.add(nb, base.get());
 
             if (verbose) {
@@ -584,16 +634,16 @@ int main(int argc, char* argv[]) {
 
         
 
-        auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, float* distances, idx_t* labels, Index::Param param) -> Stats {
+        auto doSearch = [&](auto nprobe, auto opt_level, auto ratio, auto early_stop_flag, auto f_time, float* distances, idx_t* labels, Index::Param* param) -> Stats {
            
             index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param);
             if (loop > 1) {
-                index.search(nq, query.get(), k, distances, labels, ratio, &param);
+                index.search(nq, query.get(), k, distances, labels, ratio);
             }
             Stopwatch stopwatch;
             Stats stats;
             for (size_t j = 0; j < loop; j++) {
-                stats = index.search(nq, query.get(), k, distances, labels, ratio, &param);
+                stats = index.search(nq, query.get(), k, distances, labels, ratio);
             }
             
             double search_time = stopwatch.elapsedSeconds() / loop;
@@ -638,59 +688,61 @@ int main(int argc, char* argv[]) {
                     std::unique_ptr<idx_t[]> labelsB = std::make_unique<idx_t[]>(nq * k);
                     std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
                     std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
-                    // else {
+
                     Index::Param oriParam;
                     oriParam.mode = Index::SearchMode::ORIGINAL;
-                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), oriParam);
-                    oriStat.print();
-                    MPI_Barrier(MPI_COMM_WORLD);
+                    // Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), &oriParam);
 
                     std::cout << YELLOW;
-
-                    Index::Param param;
-                    param.orderOptimize = !disableOrderOptimize;
-                    if(divideIVF) {
-                        param.mode = Index::SearchMode::DIVIDE_IVF;
-                    } else if (block_version) {
-                        param.mode = Index::SearchMode::DIVIDE_DIM;
-                    } else {
-                        param.mode = Index::SearchMode::ORIGINAL;
-                    }
-                    param.period = period;
-                    param.cut = cut;
-                    param.fullWarmUp = fullWarmUp;
-                    auto heapTops = std::make_unique<float[]>(nq); 
-                    if(param.fullWarmUp) {
-                        cout << YELLOW << "Full Warm Up!" << RESET << endl;
-                        param.heapTops = heapTops.get();
-                        for(int q = 0; q < nq; q++){
-                            param.heapTops[q] = ground_truth_D[q * k + k - 1];
-                            // printVector(ground_truth_D.get() + q * k, k, MAG);
-                        }   
-                        // printVector(param.heapTops, nq, BLUE);
-                    }
-
-                    if (param.mode != Index::SearchMode::ORIGINAL) {
-                        Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), param);
-                        stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
-                        cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
-                        stat.original_time = oriStat.query_time;
-                        stat.print();
-                        // stat.myToCsv(log_path, true, dataset);
-                        stat.myToCsv(log_path, true, dataset + inBalanceString);
-                    } 
-                    for(int i = 0; i < nq; i++) {
-                        // if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
-                        // if(true) {
-                        //     std::cout << "Q" << i << " " << std::endl;
-                        //     printVector(distances.get() + i * k, k, BLUE);
-                        //     printVector(distancesB.get() + i * k, k, BLUE);
-                        //     printVector(labels.get() + i * k, k, GREEN);
-                        //     printVector(labelsB.get() + i * k, k, GREEN);
-                        // }
-                    }
+                    // oriStat.print();
                     std::cout << RESET;
-                    // }
+
+                    if(searchMode != Index::SearchMode::ORIGINAL) {
+
+                        MPI_Barrier(MPI_COMM_WORLD);
+                        // std::cout << YELLOW;
+
+                        Index::Param param;
+                        param.orderOptimize = !disableOrderOptimize;
+                        param.mode = searchMode;
+                        param.period = period;
+                        param.cut = cut;
+                        param.fullWarmUp = fullWarmUp;
+                        param.groupCount = groupCount;
+                        param.teamCount = teamCount;
+                        param.teamSize = teamSize;
+                        auto heapTops = std::make_unique<float[]>(nq); 
+                        if(param.fullWarmUp) {
+                            cout << YELLOW << "Full Warm Up!" << RESET << endl;
+                            param.heapTops = heapTops.get();
+                            for(int q = 0; q < nq; q++){
+                                param.heapTops[q] = ground_truth_D[q * k + k - 1];
+                                // printVector(ground_truth_D.get() + q * k, k, MAG);
+                            }   
+                            // printVector(param.heapTops, nq, BLUE);
+                        }
+
+                        if (param.mode != Index::SearchMode::ORIGINAL) {
+                            Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), &param);
+                            // stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
+                            cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
+                            // stat.original_time = oriStat.query_time;
+                            stat.print();
+                            // stat.myToCsv(log_path, true, dataset);
+                            stat.myToCsv(log_path, true, dataset + inBalanceString);
+                        } 
+                        for(int i = 0; i < nq; i++) {
+                            // if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                            // if(true) {
+                            //     std::cout << "Q" << i << " " << std::endl;
+                            //     printVector(distances.get() + i * k, k, BLUE);
+                            //     printVector(distancesB.get() + i * k, k, BLUE);
+                            //     printVector(labels.get() + i * k, k, GREEN);
+                            //     printVector(labelsB.get() + i * k, k, GREEN);
+                            // }
+                        }
+                        // std::cout << RESET;
+                    }
                 }
             }
             if (early_stop_flag) {

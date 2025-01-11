@@ -47,17 +47,20 @@ Index::Index(size_t d, size_t nlist, size_t nprobe, MetricType metric, OptLevel 
 
 // }
 
-void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param param) {
-    if(param.mode == SearchMode::ORIGINAL) {
-        return;
-    }
+void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param* param) {
 
     this->workerCount = workerCount;
     this->blockCount = blockCount;
     this->warmUpSearchList = warmUpSearchList;
     this->warmUpSearchListSize = warmUpSearchListSize;
+    this->param = param;
 
-    if(param.mode == SearchMode::DIVIDE_IVF) {
+    if(param->mode == SearchMode::ORIGINAL) {
+        return;
+    }
+
+
+    if(param->mode == SearchMode::DIVIDE_IVF) {
 
         for(size_t rank = 1; rank <= workerCount; rank++) {
             size_t beginIVF = (rank - 1) * (nlist / workerCount); 
@@ -89,7 +92,7 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
         MPI_Bcast(centroid_codes.get(), nlist * d, MPI_FLOAT, 0, MPI_COMM_WORLD);
         MPI_Bcast(centroid_ids.get(), nlist , MPI_INT64_T, 0, MPI_COMM_WORLD);
 
-    } else if(param.mode == SearchMode::DIVIDE_DIM) {
+    } else if(param->mode == SearchMode::DIVIDE_DIM) {
         MyStopWatch watch(true);
         assert(d % workerCount == 0);
         // assert(nq % blockCount == 0);
@@ -171,8 +174,8 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
         for (size_t i = 1; i <= workerCount; i++) {
             workerSearchBlockOrder[i] = vector<idx_t>(blockCount);
         }
-        if(param.orderOptimize) {
-            if(blockCount % workerCount == 0 && param.period) {
+        if(param->orderOptimize) {
+            if(blockCount % workerCount == 0 && param->period) {
                 cout << YELLOW << "use Period Block Order" << RESET << endl;
                 size_t period = workerCount;
                 size_t layer = blockCount / workerCount;
@@ -258,8 +261,49 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
         // watch.print("ordering");
         watch.print("preSearch");
 
-    } else if (param.mode == SearchMode::DIVIDE_GROUP) {
+    } else if (param->mode == SearchMode::DIVIDE_GROUP) {
+        MyStopWatch watch(true);
+        groupSearchOrder = SearchOrder(param->teamCount, param->groupCount, true);
+        blockSearchOrder = SearchOrder(param->teamSize, blockCount, true);
+        // groupSearchOrder.print();
+        // blockSearchOrder.print();
+        beginIVFs = vector<size_t>(param->teamCount + 1);
+        ivfCounts = vector<size_t>(param->teamCount + 1);
+        presumeTotalQueryCompareSize = presumeNq / nlist * nprobe * nb * 2;
+        for(size_t rank = 1; rank <= workerCount; rank++) {
+            size_t teamId = (rank - 1) / param->teamSize + 1; //从1开始
+            size_t rankInSideTeam = rank - (teamId - 1) * param->teamSize;
+            size_t beginIVF = (teamId - 1) * (nlist / param->teamCount); 
+            size_t ivfCount = (teamId == param->teamCount) ? (nlist - beginIVF) : (nlist / param->teamCount);
+            beginIVFs[teamId] = beginIVF;
+            ivfCounts[teamId] = ivfCount;
+            GroupWorker::InitInfo info = GroupWorker::InitInfo(d, d / param->teamSize, workerCount, nlist, blockCount, nprobe,
+                nb, presumeTotalQueryCompareSize / param->groupCount / blockCount, param->groupCount, param->teamCount, param->teamSize, beginIVF, ivfCount, teamId, rankInSideTeam);
+            MPI_Send(&info, sizeof(info), MPI_BYTE, rank, 0, MPI_COMM_WORLD);
 
+            auto listSizes = std::make_unique<size_t[]>(nlist);
+            for (size_t listId = 0; listId < nlist; listId++) {
+                IVF& list = lists[listId];
+                listSizes[listId] = list.get_list_size();
+            }
+            MPI_Send(listSizes.get(), nlist * sizeof(size_t), MPI_BYTE, rank, 0, MPI_COMM_WORLD);
+
+            for (size_t i = beginIVF; i < beginIVF + ivfCount; i++) {
+                MPI_Send(lists[i].candidate_id.get(), listSizes[i] * sizeof(size_t), MPI_BYTE, rank, 0, MPI_COMM_WORLD);
+            }
+
+            auto listCodesBuffer = vector<std::unique_ptr<float[]>>(info.nlist);
+            for (size_t i = beginIVF; i < beginIVF + ivfCount; i++) {
+                listCodesBuffer[i] = std::make_unique<float[]>(listSizes[i] * info.block_dim);
+            }
+            for (size_t listId = beginIVF; listId < beginIVF + ivfCount; listId++) {
+                IVF& list = lists[listId];
+                copy_n_partial_vector(list.candidate_codes.get(), listCodesBuffer[listId].get(), info.d, info.block_dim,
+                            (rankInSideTeam - 1) * info.block_dim, list.get_list_size());
+                MPI_Send(listCodesBuffer[listId].get(), list.get_list_size() * info.block_dim, MPI_FLOAT, rank, 0, MPI_COMM_WORLD);
+            }
+
+        }
     }
     MPI_Barrier(MPI_COMM_WORLD);
     uniWatch = MyStopWatch(true, "masterUniWatch", CRAN);
@@ -1028,18 +1072,123 @@ void Index::warmUpSearch(size_t n, const float* queries, size_t k, float* distan
     }
 }
 
-void Index::single_thread_search_group(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
-    this->blockSize = n / blockCount;
+
+void Index::search_group_master(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
+    this->groupSize = n / param->groupCount;
+    this->blockSize = groupSize / blockCount;
+    // cout << groupSize << " " << blockSize << endl;
+
     printIndex();
+
     MyStopWatch watch(true);
-    // std::cout << GREEN << "block search" << RESET << std::endl;
+
     // n个查询向量对应的nprobe个聚类中心id
     std::unique_ptr<idx_t[]> listidqueries = findNearNprobeOfCentroidIds(n, queries);
-    // watch.print("findNearNprobeOfCentroidIds");
+
+
+    // 3. nq, querys
+    MPI_Bcast(&n, sizeof(n), MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&k, sizeof(k), MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(const_cast<float*>(queries), n * d, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    // watch.print("nq,querys");
+
+    // 4.listidqueries
+    MPI_Bcast(listidqueries.get(), n * nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
+
+    // printVector(beginIVFs, GREEN);
+    // printVector(ivfCounts, RED);
+
+    // for(int i = 0; i < param->groupCount; i++) {
+    //     for(int j = 0; j < blockCount; j++) {
+    //         cout << format("group {} block {} tag {}", i, j, GroupWorker::getTag(i, j, blockCount)) << endl;
+    //     }
+    // }
+    //算出每个worker的每个查询向量的数据量是多少
+    vector<std::unique_ptr<idx_t[]>> queryCompareSize = vector<std::unique_ptr<idx_t[]>>(param->teamCount + 1);
+    for(int teamId = 1; teamId <= param->teamCount; teamId++) {
+        queryCompareSize[teamId] = std::make_unique<idx_t[]>(n);
+    }
+    
+    for(size_t q = 0; q < n; q++) {
+        idx_t* listIds = listidqueries.get() + q * nprobe;
+        for(size_t i = 0; i < nprobe; i++) {
+            idx_t listId = listIds[i];
+            for(size_t teamId = 1; teamId <= param->teamCount; teamId++) {
+                if(listId >= beginIVFs[teamId] && listId < beginIVFs[teamId] + ivfCounts[teamId]) {
+                    queryCompareSize[teamId][q] += lists[listId].get_list_size();
+                    // cout << format("rank {} q{} listid {}", rank, q, listId) << endl;
+                }
+            }
+        }
+    }
+    for(size_t teamId = 1; teamId <= param->teamCount; teamId++) {
+        cout << queryCompareSize[teamId][0] << endl;
+    }
+    vector<std::unique_ptr<idx_t[]>> queryCompareSizePreSum = vector<std::unique_ptr<idx_t[]>>(param->teamCount + 1);
+    for(int teamId = 1; teamId <= param->teamCount; teamId++) {
+        queryCompareSizePreSum[teamId] = std::make_unique<idx_t[]>(n + 1);
+    }
+    for(size_t teamId = 1; teamId <= param->teamCount; teamId++) {
+        for (size_t q = 1; q < n + 1; q++) {
+            queryCompareSizePreSum[teamId][q] = queryCompareSizePreSum[teamId][q - 1] + queryCompareSize[teamId][q - 1];
+        }
+    }
+    for(size_t teamId = 1; teamId <= param->teamCount; teamId++) {
+        for(size_t rank = (teamId - 1) * param->teamSize + 1; rank <= teamId * param->teamSize; rank++) {
+            // MPI_Send(queryCompareSizePreSum[rank].get(), n,MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
+            MPI_Send(queryCompareSize[teamId].get(), n,MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
+            MPI_Send(queryCompareSizePreSum[teamId].get(), n + 1,MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
+        }
+    }
+    watch.print("queryCompareSize");
+
+
+    std::unique_ptr<float[]> heapTops = std::make_unique<float[]>(n);
+    warmUpSearch(n, queries, k, distances, labels, listidqueries.get());
+    // watch.print("warmupSearch");
+    for(size_t i = 0; i < n; i++) {
+        heapTops[i] = distances[i * k];
+    }
+    // 最大堆广播
+    MPI_Bcast(heapTops.get(), n, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    init_result(METRIC_L2, n * k, distances, labels);
+
 
     
+    bool first = false;
+    MyStopWatch loadWatch; //负载均衡
+#pragma omp parallel for
+    for(size_t teamId = 1; teamId <= param->teamCount; teamId++) {
+        for(size_t groupOrder = 0; groupOrder < param->groupCount; groupOrder++) {
+            size_t groupId = groupSearchOrder.workerSearchOrder[teamId][groupOrder];
+            // cout << "teamid" << teamId << "groupId" << groupId << endl;
+            for(size_t blockId = 0; blockId < blockCount; blockId++) {
+                size_t senderRank = blockSearchOrder.searchedWorkerOrder[blockId][blockSearchOrder.searchedWorkerOrder[blockId].size() - 1] + (teamId - 1) * param->teamSize;
+                size_t q = groupId * groupSize + blockId * blockSize;
+                int tag = GroupWorker::getTag(groupId, blockId, blockCount);
+                // cout << format("blockId {} sender {} group {} team {} q {} tag {}", blockId, senderRank, groupId, teamId, q, tag) << endl;
+                MPI_Recv(distances + q * k , blockSize * k, MPI_FLOAT, senderRank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Recv(labels + q * k , blockSize * k, MPI_INT64_T, senderRank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+            for(size_t q = groupId * groupSize; q < (groupId + 1) * groupSize; q++) {
+                heapTops[q] = distances[q * k];
+            }
+            size_t receiverTeam = groupSearchOrder.sendNextWorker[teamId][groupId];
+            if(receiverTeam != 0) {
+                size_t q = groupId * groupSize;
+                for(size_t rank = (teamId - 1) * param->teamSize + 1; rank <= teamId * param->teamSize; rank++) {
+                    // cout << format("receiver {} group {} team {} q {} tag {} {}", rank, groupId, teamId, q, GroupWorker::getDistanceHeapTag(groupId), GroupWorker::getIdHeapTag(groupId)) << endl;
+                    MPI_Send(heapTops.get() + q * k, groupSize * k, MPI_FLOAT, rank, 0, MPI_COMM_WORLD);
+                    // MPI_Send(distances + q * k, groupSize * k, MPI_FLOAT, rank, GroupWorker::getDistanceHeapTag(groupId), MPI_COMM_WORLD);
+                    // MPI_Send(labels + q * k, groupSize * k, MPI_FLOAT, rank, GroupWorker::getIdHeapTag(groupId), MPI_COMM_WORLD);
+                }
+            }
+        }
+    }
+    loadWatch.print("Load Balance Time(first to Last Block)");
+    watch.print("searchblock"); 
+    cout << CRAN << "finish search" << RESET << endl;
 }
-
 void Index::single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* labels) {
     this->blockSize = n / blockCount;
     printIndex();
@@ -1692,9 +1841,8 @@ int Index::single_thread_search(size_t n, const float* queries, size_t k, float*
     return calculatedCount;
 }
 
-Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
-                    Param* param) {
-    this->param = param;
+Stats Index::search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio) {
+
     if (n == 0) {
         return Stats();
     }
@@ -1720,6 +1868,10 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
         } else if (param->mode == SearchMode::DIVIDE_IVF) {
             std::cout << BLUE << "Divide IVF version of search" << RESET << std::endl;
             search_divide_ivf(n, queries, k, distances, labels);
+            return Stats();
+        } else if (param->mode == SearchMode::DIVIDE_GROUP) {
+            std::cout << BLUE << "Group version of search" << RESET << std::endl;
+            search_group_master(n, queries, k, distances, labels);
             return Stats();
         }
     }
