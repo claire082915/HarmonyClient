@@ -1188,7 +1188,7 @@ void Index::search_group_master(size_t n, const float* queries, size_t k, float*
             size_t receiverTeam = groupSearchOrder.sendNextWorker[teamId][groupId];
             if(receiverTeam != 0) {
                 size_t q = groupId * groupSize;
-                for(size_t rank = (teamId - 1) * param->teamSize + 1; rank <= teamId * param->teamSize; rank++) {
+                for(size_t rank = (receiverTeam - 1) * param->teamSize + 1; rank <= receiverTeam * param->teamSize; rank++) {
                     // cout << format("receiver {} group {} team {} q {} tag {} {}", rank, groupId, teamId, q, GroupWorker::getDistanceHeapTag(groupId), GroupWorker::getIdHeapTag(groupId)) << endl;
                     MPI_Send(heapTops.get() + q, groupSize, MPI_FLOAT, rank, 0, MPI_COMM_WORLD);
                     //TODO 优化只需要发一个块的heap就可以了
@@ -1198,6 +1198,9 @@ void Index::search_group_master(size_t n, const float* queries, size_t k, float*
                 recvWatch.print(format("send group {} heap to team {}", groupId, receiverTeam));
             }
         }
+    }
+    for(int q = 0; q < n; q++) {
+        sort_result(METRIC_L2, k, distances + q * k, labels + q * k);
     }
     // loadWatch.print("Load Balance Time(first to Last Block)");
     watch.print("searchblock"); 

@@ -732,14 +732,14 @@ int main(int argc, char* argv[]) {
                             stat.myToCsv(log_path, true, dataset + inBalanceString);
                         } 
                         for(int i = 0; i < nq; i++) {
-                            if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
-                            // if(true) {
-                                std::cout << "Q" << i << " " << std::endl;
-                                printVector(distances.get() + i * k, k, BLUE);
-                                printVector(distancesB.get() + i * k, k, BLUE);
-                                printVector(labels.get() + i * k, k, GREEN);
-                                printVector(labelsB.get() + i * k, k, GREEN);
-                            }
+                            // if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                            // // if(true) {
+                            //     std::cout << "Q" << i << " " << std::endl;
+                            //     printVector(distances.get() + i * k, k, BLUE);
+                            //     printVector(distancesB.get() + i * k, k, BLUE);
+                            //     printVector(labels.get() + i * k, k, GREEN);
+                            //     printVector(labelsB.get() + i * k, k, GREEN);
+                            // }
                         }
                         // std::cout << RESET;
                     }

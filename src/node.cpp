@@ -970,7 +970,6 @@ void GroupWorker::search(bool cut) {
             MPI_Recv(distanceHeap[groupId].get(), groupSize * k, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             MPI_Recv(idHeap[groupId].get()      , groupSize * k, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             
-            
             uniWatch.print(format("node {} recv heap from master", rank), false);
         }
 
@@ -1181,7 +1180,7 @@ void GroupWorker::searchBlock(size_t blockId, bool cut, size_t groupId) {
         }
         // cout << curDistancePosition << " " << queryCompareSize[q] << endl;
         assert(curDistancePosition == queryCompareSize[q]);
-        sort_result(METRIC_L2, k, simi, idxi);
+        // sort_result(METRIC_L2, k, simi, idxi);
     }
 
     totalSkip += skip;
