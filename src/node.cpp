@@ -1107,7 +1107,6 @@ void GroupWorker::searchBlock(size_t blockId, bool cut, size_t groupId) {
     float* distanceBuffer = distancesForBlocks[groupId][blockId].get();
 
     size_t queryStart = getQueryOffset(groupId, blockId);
-    cout << "queryStart" << queryStart << endl;
     idx_t totalQueryCompareSize = getBlockQueryCompareSize(groupId,blockId);
         
     // cout << RED << rank << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
@@ -1129,7 +1128,6 @@ void GroupWorker::searchBlock(size_t blockId, bool cut, size_t groupId) {
 
         float* simi = distanceHeap[groupId].get() + k * (q - queryStart + blockId * blockSize);
         idx_t* idxi = idHeap[groupId].get()       + k * (q - queryStart + blockId * blockSize);
-
         size_t curDistancePosition = 0;  // 在一个查询向量的结果内
 
         for (size_t i = 0; i < info.nprobe; i++) {
@@ -1197,8 +1195,8 @@ void GroupWorker::searchBlock(size_t blockId, bool cut, size_t groupId) {
     MyStopWatch watch(true);
     int tag = GroupWorker::getTag(groupId, blockId, info.blockCount);
     if(shouldSendHeap(blockId)) {
-        MPI_Send(distanceHeap[groupId].get() + blockId * blockSize, blockSize * k, MPI_FLOAT  , 0, tag, MPI_COMM_WORLD);
-        MPI_Send(idHeap[groupId].get()       + blockId * blockSize, blockSize * k, MPI_INT64_T, 0, tag, MPI_COMM_WORLD);
+        MPI_Send(distanceHeap[groupId].get() + blockId * blockSize * k, blockSize * k, MPI_FLOAT  , 0, tag, MPI_COMM_WORLD);
+        MPI_Send(idHeap[groupId].get()       + blockId * blockSize * k, blockSize * k, MPI_INT64_T, 0, tag, MPI_COMM_WORLD);
         // init_result(METRIC_L2, blockSize * k, distanceHeap.get(), idHeap.get());
     } else {
         MPI_Isend(distanceBuffer, totalQueryCompareSize, MPI_FLOAT, getReceiver(groupId, blockId), tag, MPI_COMM_WORLD, &sendRequests[blockId]);
