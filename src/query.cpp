@@ -691,10 +691,10 @@ int main(int argc, char* argv[]) {
 
                     Index::Param oriParam;
                     oriParam.mode = Index::SearchMode::ORIGINAL;
-                    // Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), &oriParam);
+                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), &oriParam);
 
                     std::cout << YELLOW;
-                    // oriStat.print();
+                    oriStat.print();
                     std::cout << RESET;
 
                     if(searchMode != Index::SearchMode::ORIGINAL) {
@@ -732,14 +732,14 @@ int main(int argc, char* argv[]) {
                             stat.myToCsv(log_path, true, dataset + inBalanceString);
                         } 
                         for(int i = 0; i < nq; i++) {
-                            // if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
+                            if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
                             // if(true) {
-                            //     std::cout << "Q" << i << " " << std::endl;
-                            //     printVector(distances.get() + i * k, k, BLUE);
-                            //     printVector(distancesB.get() + i * k, k, BLUE);
-                            //     printVector(labels.get() + i * k, k, GREEN);
-                            //     printVector(labelsB.get() + i * k, k, GREEN);
-                            // }
+                                std::cout << "Q" << i << " " << std::endl;
+                                printVector(distances.get() + i * k, k, BLUE);
+                                printVector(distancesB.get() + i * k, k, BLUE);
+                                printVector(labels.get() + i * k, k, GREEN);
+                                printVector(labelsB.get() + i * k, k, GREEN);
+                            }
                         }
                         // std::cout << RESET;
                     }

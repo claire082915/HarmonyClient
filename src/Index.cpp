@@ -263,20 +263,26 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
 
     } else if (param->mode == SearchMode::DIVIDE_GROUP) {
         MyStopWatch watch(true);
+
         groupSearchOrder = SearchOrder(param->teamCount, param->groupCount, true);
         blockSearchOrder = SearchOrder(param->teamSize, blockCount, true);
         // groupSearchOrder.print();
         // blockSearchOrder.print();
+
         beginIVFs = vector<size_t>(param->teamCount + 1);
         ivfCounts = vector<size_t>(param->teamCount + 1);
+
         presumeTotalQueryCompareSize = presumeNq / nlist * nprobe * nb * 2;
+
         for(size_t rank = 1; rank <= workerCount; rank++) {
             size_t teamId = (rank - 1) / param->teamSize + 1; //从1开始
             size_t rankInSideTeam = rank - (teamId - 1) * param->teamSize;
             size_t beginIVF = (teamId - 1) * (nlist / param->teamCount); 
             size_t ivfCount = (teamId == param->teamCount) ? (nlist - beginIVF) : (nlist / param->teamCount);
+
             beginIVFs[teamId] = beginIVF;
             ivfCounts[teamId] = ivfCount;
+
             GroupWorker::InitInfo info = GroupWorker::InitInfo(d, d / param->teamSize, workerCount, nlist, blockCount, nprobe,
                 nb, presumeTotalQueryCompareSize / param->groupCount / blockCount, param->groupCount, param->teamCount, param->teamSize, beginIVF, ivfCount, teamId, rankInSideTeam);
             MPI_Send(&info, sizeof(info), MPI_BYTE, rank, 0, MPI_COMM_WORLD);
@@ -304,6 +310,7 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
             }
 
         }
+        watch.print("preSearch");
     }
     MPI_Barrier(MPI_COMM_WORLD);
     uniWatch = MyStopWatch(true, "masterUniWatch", CRAN);
@@ -1080,7 +1087,7 @@ void Index::search_group_master(size_t n, const float* queries, size_t k, float*
 
     printIndex();
 
-    MyStopWatch watch(true);
+    MyStopWatch watch(true, "search_group_master", CRAN);
 
     // n个查询向量对应的nprobe个聚类中心id
     std::unique_ptr<idx_t[]> listidqueries = findNearNprobeOfCentroidIds(n, queries);
@@ -1121,9 +1128,9 @@ void Index::search_group_master(size_t n, const float* queries, size_t k, float*
             }
         }
     }
-    for(size_t teamId = 1; teamId <= param->teamCount; teamId++) {
-        cout << queryCompareSize[teamId][0] << endl;
-    }
+    // for(size_t teamId = 1; teamId <= param->teamCount; teamId++) {
+    //     cout << queryCompareSize[teamId][0] << endl;
+    // }
     vector<std::unique_ptr<idx_t[]>> queryCompareSizePreSum = vector<std::unique_ptr<idx_t[]>>(param->teamCount + 1);
     for(int teamId = 1; teamId <= param->teamCount; teamId++) {
         queryCompareSizePreSum[teamId] = std::make_unique<idx_t[]>(n + 1);
@@ -1156,9 +1163,10 @@ void Index::search_group_master(size_t n, const float* queries, size_t k, float*
 
     
     bool first = false;
-    MyStopWatch loadWatch; //负载均衡
+    // MyStopWatch loadWatch; //负载均衡
 #pragma omp parallel for
     for(size_t teamId = 1; teamId <= param->teamCount; teamId++) {
+        MyStopWatch recvWatch(true, "Master Recv Watch", CRAN);
         for(size_t groupOrder = 0; groupOrder < param->groupCount; groupOrder++) {
             size_t groupId = groupSearchOrder.workerSearchOrder[teamId][groupOrder];
             // cout << "teamid" << teamId << "groupId" << groupId << endl;
@@ -1168,24 +1176,30 @@ void Index::search_group_master(size_t n, const float* queries, size_t k, float*
                 int tag = GroupWorker::getTag(groupId, blockId, blockCount);
                 // cout << format("blockId {} sender {} group {} team {} q {} tag {}", blockId, senderRank, groupId, teamId, q, tag) << endl;
                 MPI_Recv(distances + q * k , blockSize * k, MPI_FLOAT, senderRank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                MPI_Recv(labels + q * k , blockSize * k, MPI_INT64_T, senderRank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Recv(labels    + q * k , blockSize * k, MPI_INT64_T, senderRank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             }
+
+            recvWatch.print(format("recv heap group {} from team {}", groupId, teamId));
+
             for(size_t q = groupId * groupSize; q < (groupId + 1) * groupSize; q++) {
                 heapTops[q] = distances[q * k];
             }
+
             size_t receiverTeam = groupSearchOrder.sendNextWorker[teamId][groupId];
             if(receiverTeam != 0) {
                 size_t q = groupId * groupSize;
                 for(size_t rank = (teamId - 1) * param->teamSize + 1; rank <= teamId * param->teamSize; rank++) {
                     // cout << format("receiver {} group {} team {} q {} tag {} {}", rank, groupId, teamId, q, GroupWorker::getDistanceHeapTag(groupId), GroupWorker::getIdHeapTag(groupId)) << endl;
-                    MPI_Send(heapTops.get() + q * k, groupSize * k, MPI_FLOAT, rank, 0, MPI_COMM_WORLD);
-                    // MPI_Send(distances + q * k, groupSize * k, MPI_FLOAT, rank, GroupWorker::getDistanceHeapTag(groupId), MPI_COMM_WORLD);
-                    // MPI_Send(labels + q * k, groupSize * k, MPI_FLOAT, rank, GroupWorker::getIdHeapTag(groupId), MPI_COMM_WORLD);
+                    MPI_Send(heapTops.get() + q, groupSize, MPI_FLOAT, rank, 0, MPI_COMM_WORLD);
+                    //TODO 优化只需要发一个块的heap就可以了
+                    MPI_Send(distances + q * k, groupSize * k, MPI_FLOAT, rank, 0, MPI_COMM_WORLD);
+                    MPI_Send(labels + q * k, groupSize * k, MPI_INT64_T, rank, 0, MPI_COMM_WORLD);
                 }
+                recvWatch.print(format("send group {} heap to team {}", groupId, receiverTeam));
             }
         }
     }
-    loadWatch.print("Load Balance Time(first to Last Block)");
+    // loadWatch.print("Load Balance Time(first to Last Block)");
     watch.print("searchblock"); 
     cout << CRAN << "finish search" << RESET << endl;
 }

@@ -866,18 +866,28 @@ void GroupWorker::init(int rank, bool blockSend) {
     heapTops = std::make_unique<float[]>(presumeNq);
     queryCompareSize = std::make_unique<idx_t[]>(presumeNq);
     queryCompareSizePreSum = std::make_unique<idx_t[]>(presumeNq + 1);
-    distanceHeap = vector<std::unique_ptr<float[]>>(info.blockCount);
-    idHeap = vector<std::unique_ptr<idx_t[]>>(info.blockCount);
-    for (size_t i = 0; i < info.blockCount; i++) {
+    // distanceHeap = vector<std::unique_ptr<float[]>>(info.blockCount);
+    // idHeap = vector<std::unique_ptr<idx_t[]>>(info.blockCount);
+    // for (size_t i = 0; i < info.blockCount; i++) {
+    //     distanceHeap[i] = std::make_unique<float[]>(presumeK * presumeNq);
+    //     idHeap[i] = std::make_unique<idx_t[]>(presumeK * presumeNq);
+    //     init_result(METRIC_L2, presumeNq * presumeK, distanceHeap[i].get(), idHeap[i].get());
+    // }
+    distanceHeap = vector<std::unique_ptr<float[]>>(info.groupCount);
+    idHeap = vector<std::unique_ptr<idx_t[]>>(info.groupCount);
+    for (size_t i = 0; i < info.groupCount; i++) {
         distanceHeap[i] = std::make_unique<float[]>(presumeK * presumeNq);
         idHeap[i] = std::make_unique<idx_t[]>(presumeK * presumeNq);
         init_result(METRIC_L2, presumeNq * presumeK, distanceHeap[i].get(), idHeap[i].get());
     }
     
-    blockDistancesSize = 2 * presumeNq / info.blockCount * info.nb;
-    distancesForBlocks = vector<std::unique_ptr<float[]>>(info.blockCount);
-    for (size_t i = 0; i < info.blockCount; i++) {
-        distancesForBlocks[i] = std::make_unique<float[]>(blockDistancesSize);
+    blockDistancesSize = 2 * presumeNq / info.blockCount / info.groupCount * info.nb * info.nprobe / info.nlist;
+    distancesForBlocks = vector<vector<std::unique_ptr<float[]>>>(info.groupCount);
+    for (size_t i = 0; i < distancesForBlocks.size(); i++) {
+        distancesForBlocks[i] = vector<std::unique_ptr<float[]>>(info.blockCount);
+        for (size_t j = 0; j < distancesForBlocks[i].size(); j++) {
+            distancesForBlocks[i][j] = std::make_unique<float[]>(blockDistancesSize);
+        }
     }
 
 
@@ -891,7 +901,7 @@ void GroupWorker::init(int rank, bool blockSend) {
 
     skipRates = vector<double>(info.blockCount, 0);
 
-    cout << "finish init" << endl;
+    // cout << "finish init" << endl;
 
 
 }
@@ -957,11 +967,16 @@ void GroupWorker::search(bool cut) {
         if(sender != 0) {
             MPI_Recv(heapTops.get() + groupId * groupSize, groupSize, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             // MPI_Recv(listSizes.get(), info.nlist * sizeof(size_t), MPI_BYTE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(distanceHeap[groupId].get(), groupSize * k, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(idHeap[groupId].get()      , groupSize * k, MPI_INT64_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            
+            
+            uniWatch.print(format("node {} recv heap from master", rank), false);
         }
 
         searchGroup(groupId);
 
-        reset();
+        // reset();
     }
 
     totalWatch.print(format("node {} Finish Search", rank));
@@ -997,10 +1012,12 @@ void GroupWorker::searchGroup(idx_t groupId)
     //         // distanceBufferPool->use(blockId);
     //     }
     // }
+
+    //TODO FIX DISQUEST
     for (size_t blockId = 0; blockId < info.blockCount; blockId++) {
         size_t sender = getSender(groupId, blockId);
         if(sender != 0) {
-            MPI_Irecv(distancesForBlocks[blockId].get(), getBlockQueryCompareSize(groupId, blockId), MPI_FLOAT, sender, getTag(groupId, blockId, info.blockCount), MPI_COMM_WORLD, &disRequests[blockId][0]);
+            MPI_Irecv(distancesForBlocks[groupId][blockId].get(), getBlockQueryCompareSize(groupId, blockId), MPI_FLOAT, sender, getTag(groupId, blockId, info.blockCount), MPI_COMM_WORLD, &disRequests[blockId][0]);
             // MPI_Irecv(distanceBufferPool->getBuffer(blockId), getTotalQueryCompareSize(blockId), MPI_FLOAT, sender, blockId, MPI_COMM_WORLD, &disRequests[blockId]);
             // bool suc = distanceBufferPool->IRecv(blockId, getTotalQueryCompareSize(blockId), sender, disRequests[blockId]);
             // if(!suc) {
@@ -1082,14 +1099,15 @@ void GroupWorker::searchGroup(idx_t groupId)
 }
 
 void GroupWorker::searchBlock(size_t blockId, bool cut, size_t groupId) {
-    // uniWatch.print(format("searchBlock 搜索开始 node({}) group({}) block({})", rank, groupId, blockId), false);
+    uniWatch.print(format("searchBlock 搜索开始 node({}) group({}) block({})", rank, groupId, blockId), false);
     MyStopWatch searchWatch(true, "searchBlock");
 
 
     // float* distanceBuffer = distanceBufferPool->getBuffer(blockId);
-    float* distanceBuffer = distancesForBlocks[blockId].get();
+    float* distanceBuffer = distancesForBlocks[groupId][blockId].get();
 
     size_t queryStart = getQueryOffset(groupId, blockId);
+    cout << "queryStart" << queryStart << endl;
     idx_t totalQueryCompareSize = getBlockQueryCompareSize(groupId,blockId);
         
     // cout << RED << rank << "node search: blockId:" << blockId << " totalCompareSize:" << totalQueryCompareSize << RESET
@@ -1109,8 +1127,8 @@ void GroupWorker::searchBlock(size_t blockId, bool cut, size_t groupId) {
         size_t queryOffset =
             queryCompareSizePreSum[q] - queryCompareSizePreSum[queryStart];  // 第q个查询的结果应该存的地址偏移量
 
-        float* simi = distanceHeap[blockId].get() + k * (q - queryStart);
-        idx_t* idxi = idHeap[blockId].get() + k * (q - queryStart);
+        float* simi = distanceHeap[groupId].get() + k * (q - queryStart + blockId * blockSize);
+        idx_t* idxi = idHeap[groupId].get()       + k * (q - queryStart + blockId * blockSize);
 
         size_t curDistancePosition = 0;  // 在一个查询向量的结果内
 
@@ -1179,8 +1197,8 @@ void GroupWorker::searchBlock(size_t blockId, bool cut, size_t groupId) {
     MyStopWatch watch(true);
     int tag = GroupWorker::getTag(groupId, blockId, info.blockCount);
     if(shouldSendHeap(blockId)) {
-        MPI_Send(distanceHeap[blockId].get(), blockSize * k, MPI_FLOAT, 0, tag, MPI_COMM_WORLD);
-        MPI_Send(idHeap[blockId].get(), blockSize * k, MPI_INT64_T, 0, tag, MPI_COMM_WORLD);
+        MPI_Send(distanceHeap[groupId].get() + blockId * blockSize, blockSize * k, MPI_FLOAT  , 0, tag, MPI_COMM_WORLD);
+        MPI_Send(idHeap[groupId].get()       + blockId * blockSize, blockSize * k, MPI_INT64_T, 0, tag, MPI_COMM_WORLD);
         // init_result(METRIC_L2, blockSize * k, distanceHeap.get(), idHeap.get());
     } else {
         MPI_Isend(distanceBuffer, totalQueryCompareSize, MPI_FLOAT, getReceiver(groupId, blockId), tag, MPI_COMM_WORLD, &sendRequests[blockId]);

@@ -587,10 +587,10 @@ public:
     // 为了计算第q个向量的distancesForQueryies的偏移量,偏移量是queryCompareSizePreSum[q]
     std::unique_ptr<idx_t[]> queryCompareSizePreSum;
 
-    vector<std::unique_ptr<float[]>> distanceHeap;
+    vector<std::unique_ptr<float[]>> distanceHeap; //vector的每一个指针代表一个group的所有block的heap
     vector<std::unique_ptr<idx_t[]>> idHeap;
 
-    vector<std::unique_ptr<float[]>> distancesForBlocks;
+    vector<vector<std::unique_ptr<float[]>>> distancesForBlocks;
     size_t blockDistancesSize;
     double waitTime = 0, searchTime = 0;
     size_t presumeNq = 10000, presumeK = 100;
@@ -669,9 +669,9 @@ private:
     void searchGroup(idx_t groupId);
     void searchBlock(size_t blockId, bool cut, size_t groupId);
     void reset() {
-        for (size_t i = 0; i < info.blockCount; i++) {
-            init_result(METRIC_L2, blockSize * k, distanceHeap[i].get(), idHeap[i].get());
-        }
+        // for (size_t i = 0; i < info.blockCount; i++) {
+        //     init_result(METRIC_L2, blockSize * k, distanceHeap[i].get(), idHeap[i].get());
+        // }
         //distancefornblocks
     }
     size_t getSender(idx_t groupId, idx_t blockId);
