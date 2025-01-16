@@ -21,6 +21,8 @@
 #include "common.h"
 #include "faiss/faiss/utils/distances.h"
 #include "platform_macros.h"
+#include <random>
+#include <cmath>
 
 namespace tribase {
     const std::string BLUE = "\033[1;34m"; // Blue text
@@ -167,9 +169,9 @@ inline bool diffVector(const T* const v1, const T* const v2, size_t d) {
     return false;
 }
 template <typename T>
-inline void printVector(std::vector<T>& v, std::string color) {
+inline void printVector(std::vector<T>& v, std::string color, std::string str = "") {
     using namespace std;
-    std::cout << "[" << color;
+    std::cout << color << str << "[";
     for(size_t i = 0; i < v.size(); i++) {
         cout << v[i] << " ";
     }
@@ -178,9 +180,9 @@ inline void printVector(std::vector<T>& v, std::string color) {
     cout << RESET;
 }
 template <typename T>
-inline void printVector(const T* const from, size_t d, std::string color) {
+inline void printVector(const T* const from, size_t d, std::string color, std::string str = "") {
     using namespace std;
-    std::cout << "[" << color;
+    std::cout << color << str << "[";
     for(size_t i = 0; i < d; i++) {
         cout << from[i] << " ";
     }
@@ -240,6 +242,41 @@ inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadFvecs(const std::st
 
     return std::make_tuple(std::move(vectors), n, d);
 }
+inline std::pair<size_t, int> loadTvecsInfo(const std::string& filePath) {
+    std::ifstream file(filePath);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file: " << filePath << std::endl;
+        return {};
+    }
+
+    size_t m = 0; 
+    int d = 0;    
+
+    std::string line;
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        std::string value;
+
+        std::getline(ss, value, ',');
+
+        int current_d = 0;
+        while (std::getline(ss, value, ',')) {
+            current_d++;
+        }
+
+        if (m == 0) {
+            d = current_d; 
+        }
+
+        m++; 
+    }
+    if(d == 2709) {
+        d = 2712;
+        return {m * 600, d};
+    }
+    return {m * 100, d};
+}
+
 
 inline std::pair<size_t, int> loadBvecsInfo(const std::string& filePath) {
     std::ifstream file(filePath, std::ios::binary);
@@ -310,8 +347,105 @@ inline std::pair<size_t, int> loadXvecsInfo(const std::string& filePath) {
         return loadFvecsInfo(filePath);
     } else if (filePath.ends_with(".bvecs")) {
         return loadBvecsInfo(filePath);
+    } else if (filePath.ends_with(".txt")) {
+        return loadTvecsInfo(filePath);
     }
+    
     throw std::runtime_error("no support file");
+}
+inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadTvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
+    std::ifstream file(filePath);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file: " << filePath << std::endl;
+        return {};
+    }
+
+    size_t m = 0; 
+    int d = 0;    
+    std::vector<std::vector<float>> data;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        std::string value;
+        std::vector<float> row;
+
+        std::getline(ss, value, ',');
+
+        while (std::getline(ss, value, ',')) {
+            row.push_back(std::stof(value));
+        }
+
+        if (m == 0) {
+            d = row.size(); 
+        }
+
+        data.push_back(row);
+        m++; 
+    }
+
+    size_t a = bounds.first;
+    size_t b = (bounds.second == 0) ? m : bounds.second;
+
+    assert(a >= 1 && b <= m && b >= a);
+
+    size_t n = b - a + 1;
+    if(filePath.ends_with("query.txt")) {
+        if(d == 2712 || d == 2709) {
+            d = 2712;
+        }
+        for(int i = 0; i < 3; i++) {
+            for(int j = 0; j < data.size(); j++) {
+                data[j].push_back(0);
+            }
+        }
+        std::unique_ptr<float[]> float_vectors = std::make_unique<float[]>(n * d);
+
+        for (size_t i = a - 1; i < b; ++i) {
+            for (int j = 0; j < d; ++j) {
+                float_vectors[(i - (a - 1)) * d + j] = data[i][j];
+            }
+        }
+        // for(int i = 0; i < n; i++) {
+        //     printVector(float_vectors.get() + i * d, d, GREEN);
+        // }
+        return std::make_tuple(std::move(float_vectors), n , d);
+
+
+    } else {
+
+        int factor = 0;
+        if(d == 2712 || d == 2709) {
+            d = 2712;
+            factor = 600;
+        } else {
+            factor = 100;
+        }
+        for(int i = 0; i < 3; i++) {
+            for(int j = 0; j < data.size(); j++) {
+                data[j].push_back(0);
+            }
+        }
+
+        std::unique_ptr<float[]> float_vectors = std::make_unique<float[]>(n * factor * d);
+
+        for (size_t i = a - 1; i < b; ++i) {
+            for (int j = 0; j < d; ++j) {
+                float_vectors[(i - (a - 1)) * d + j] = data[i][j];
+            }
+        }
+        for(int i = 1; i < factor; i++) {
+            for(int j = 0; j < n * d; j++) {
+                float_vectors[i * n * d + j] = float_vectors[j] + 0.001 * i;
+            }
+            if(i == 1) {
+                // printVector(float_vectors.get() + n * d, n * d, BLUE);
+            }
+                // std::copy_n(float_vectors.get(), n * d, float_vectors.get() + i * n * d);
+        }
+
+        return std::make_tuple(std::move(float_vectors), n * factor, d);
+    }
 }
 
 inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadXvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
@@ -319,7 +453,10 @@ inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadXvecs(const std::st
         return loadFvecs(filePath, bounds);
     } else if (filePath.ends_with(".bvecs")) {
         return loadBvecs2Fvecs(filePath, bounds);
+    } else if (filePath.ends_with(".txt")) {
+        return loadTvecs(filePath);
     }
+    
     throw std::runtime_error("no support file");
 }
 
@@ -365,7 +502,8 @@ public:
     : shouldPrint(shouldPrint) , name(name) ,color(color) { watch.reset(); }
 
     void print(std::string s, bool reset = true) {
-        if (!shouldPrint) {
+        static bool printSwitch = true;
+        if (!shouldPrint || !printSwitch) {
             return;
         }
         double time = watch.elapsedSeconds(reset);
@@ -859,6 +997,50 @@ inline void output_codes(const float* code, size_t d) {
         }
     }
     std::cerr << std::endl;
+}
+
+inline std::vector<int> distribute_jobs(int total_jobs, int num_workers, float uneven_factor) {
+    std::vector<int> jobs(num_workers, 0);
+    
+    if (uneven_factor == 0.0f) {
+        // Perfectly even distribution
+        int even_jobs = total_jobs / num_workers;
+        for (int i = 0; i < num_workers; ++i) {
+            jobs[i] = even_jobs;
+        }
+        jobs[0] += total_jobs % num_workers;
+    } else if (uneven_factor == 1.0f) {
+        // Completely uneven distribution (one worker gets all jobs)
+        jobs[0] = total_jobs;
+    } else {
+        // Intermediate uneven distribution
+        // Use control factor to skew the distribution
+        int remaining_jobs = total_jobs;
+        
+        // Generate a random number distribution where jobs are skewed based on control_factor
+        // std::random_device rd;
+        // std::mt19937 gen(rd());
+        // std::uniform_real_distribution<> dis(0.0, 1.0);
+        
+        // First pass: randomly assign some jobs based on the control factor
+        // for (int i = 0; i < num_workers; ++i) {
+        //     // Determine the skew factor based on control_factor
+        //     float skew = dis(gen) * control_factor;
+        //     int job_share = static_cast<int>(total_jobs * skew);
+        //     jobs[i] = job_share;
+        //     remaining_jobs -= job_share;
+        // }
+        jobs[0] = uneven_factor * total_jobs;
+        remaining_jobs -= jobs[0]; 
+        
+        // Second pass: distribute remaining jobs evenly
+        for (int i = 0; i < num_workers; ++i) {
+            jobs[i] += remaining_jobs / num_workers;
+        }
+        jobs[0] += remaining_jobs % num_workers;
+    }
+
+    return jobs;
 }
 
 }  // namespace tribase

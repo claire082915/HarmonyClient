@@ -19,6 +19,9 @@ namespace tribase {
 class Index;
 
 using namespace std;
+
+const int presumeNq = 10000;
+
 class Worker {
 private:
 public:
@@ -75,7 +78,8 @@ public:
     vector<std::unique_ptr<float[]>> distancesForBlocks;
     size_t blockDistancesSize;
     double waitTime = 0, searchTime = 0;
-    size_t presumeNq = 10000, presumeK = 100;
+    // size_t presumeNq = 370, presumeK = 100;
+    size_t presumeK = 100;
     // // 每一块的计算结果的临时存储
     // class DistanceBufferPool {
     //     vector<std::unique_ptr<float[]>> distancesForBlocks;
@@ -515,13 +519,13 @@ class GroupWorker {
 private:
 public:
     struct InitInfo {
-        size_t d, block_dim, workerCount;
-        size_t nlist;
-        size_t blockCount, nprobe, nb;
-        idx_t presumeBlockDistancesSize;
-        size_t groupCount, teamCount, teamSize;
-        size_t startIVFId, ivfCount;
-        size_t teamId, rankInsideTeam;
+        const size_t d, block_dim, workerCount;
+        const size_t nlist;
+        const size_t blockCount, nprobe, nb;
+        const idx_t presumeBlockDistancesSize;
+        const size_t groupCount, teamCount, teamSize;
+        const size_t startIVFId, ivfCount;
+        const size_t teamId, rankInsideTeam;
 
         // Constructor with default values for all fields
         InitInfo(size_t d = 0, size_t block_dim = 0, size_t workerCount = 0, size_t nlist = 0, size_t blockCount = 0,
@@ -593,7 +597,8 @@ public:
     vector<vector<std::unique_ptr<float[]>>> distancesForBlocks;
     size_t blockDistancesSize;
     double waitTime = 0, searchTime = 0;
-    size_t presumeNq = 10000, presumeK = 100;
+    size_t presumeK = 100;
+    // size_t presumeNq = 370, presumeK = 100;
     
 
     // idx_t presumeBlockDistancesSize;
@@ -667,15 +672,21 @@ public:
     // }
 private:
     void searchGroup(idx_t groupId);
-    void searchBlock(size_t blockId, bool cut, size_t groupId);
+    void searchBlock(size_t blockId, size_t groupId);
     void reset() {
         // for (size_t i = 0; i < info.blockCount; i++) {
         //     init_result(METRIC_L2, blockSize * k, distanceHeap[i].get(), idHeap[i].get());
         // }
         //distancefornblocks
+        disRequests = vector<vector<MPI_Request>>(info.blockCount);
+        for(int i = 0; i < disRequests.size(); i++) {
+            disRequests[i] = vector<MPI_Request>(1);
+        }
+        // waitTime = searchTime = 0;
     }
     size_t getSender(idx_t groupId, idx_t blockId);
     size_t getReceiver(idx_t groupId, idx_t blockId);
+    void single_thread_searchBlock(size_t n, size_t blockId, size_t groupId, float* queries, float* distanceBuffer, float* simi, idx_t* idxi, idx_t* listidqueries);
 };
 
 

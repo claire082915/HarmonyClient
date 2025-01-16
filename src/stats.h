@@ -33,18 +33,20 @@ class Stats {
     size_t nlist;
     size_t nq, nb, d;
     size_t nprobe;
+    std::string mode;
 
-    bool divideIVF, disableOrderOptimize, cut;
-    size_t block, worker;
+    bool divideIVF, disableOrderOptimize, cut, blockSend;
+    size_t block, worker, group, team;
     double blockVersionSpeedUpWithOriginal;
 
     double faiss_query_time;
     double query_time, original_time;
-
+    double trainTime, addTime, preSearchTime, inBalanceRatio;
     OptLevel opt_level;
 
     double recall;
     double r2;
+    double variance;
     float simi_ratio;
     char* nodeList;
 
@@ -118,14 +120,16 @@ class Stats {
     }
     void myToCsv(std::string filename, bool append, std::string dataset = "Unknown") {
         CsvWriter writer(filename,
-                         {"dataset", "nb", "nq", "d", "nlist", "nprobe", "divideIVF", "orderOptimize", "cut", "block", "worker", 
+                         {"dataset", "mode", "nb", "nq", "d", "nlist", "nprobe", "divideIVF", "orderOptimize", "UnblockSend", "cut", "block", "worker",
+                          "group", "team", 
                           "time_speedup", "query_time", "original_time",
-                          "recall", "r2", "node"},
+                          "1-recall", "r2", "variance", "train_time", "add_time", "preSearch_time", "ratio"},
                          append, false);
         summary();
-        writer << dataset << nb << nq << d << nlist << nprobe <<  divideIVF << !disableOrderOptimize << cut << block << worker
-               << blockVersionSpeedUpWithOriginal << query_time << original_time
-               << recall << r2 << nodeList << std::endl;
+        writer << dataset << mode << nb << nq << d << nlist << nprobe <<  divideIVF << !disableOrderOptimize << !blockSend << cut << block << worker 
+               << group << team
+               << time_speedup << query_time << original_time
+               << 1.0 - recall << r2 << variance << trainTime << addTime << preSearchTime << inBalanceRatio << std::endl;
     }
 };
 

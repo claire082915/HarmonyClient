@@ -32,9 +32,19 @@ class Index {
         ORIGINAL,
         DIVIDE_IVF,
         DIVIDE_DIM,
-        DIVIDE_DIM_WORKER,
         DIVIDE_GROUP,
     };
+
+    static std::string to_string(SearchMode mode) {
+        switch (mode) {
+            case SearchMode::ORIGINAL: return "Original";
+            case SearchMode::DIVIDE_IVF: return "Baseline";
+            case SearchMode::DIVIDE_DIM: return "Dim     ";
+            case SearchMode::DIVIDE_GROUP: return "Group   ";
+            default: return "Unknown";
+        }
+    }
+
     struct Param {
         bool orderOptimize = true;
         SearchMode mode;
@@ -51,6 +61,9 @@ class Index {
         float* heapTops = nullptr;
 
         size_t groupCount, teamCount, teamSize;
+        bool hardInBalance = false;
+        size_t hardInBalanceTeam;
+        float hardInBalanceRatio;
     };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
@@ -67,19 +80,20 @@ class Index {
     void add_simple(size_t n, const float* codes);
     Stats search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio = 1);
     void save_index(std::string path) const;
+    void save_index(std::string path, SearchMode mode) const;
     void load_index(std::string path);
     void load_SPANN(std::string path);
     // void initWorkers(size_t workerCount, float* querys, size_t querySize, size_t blockCount, size_t nb);
     void printIndex();
    
-    void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param* param);
+    void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param* param, std::string path);
     void postSearch();
     // 其他查询方法的声明
     std::unique_ptr<IVFScanBase> get_scanner(MetricType metric, OptLevel opt_level, size_t k, EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
 
    private:
     void warmUpSearch(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, idx_t* listidqueries);
-      std::unique_ptr<idx_t[]> findNearNprobeOfCentroidIds(size_t n, const float* queries);
+    void findNearNprobeOfCentroidIds(size_t n, const float* queries);
    public:
     size_t d;
     size_t nlist;
@@ -111,7 +125,8 @@ class Index {
     size_t warmUpSearchList = 0; //取多少个聚类
     size_t warmUpSearchListSize = 0; //每个聚类取多少个向量
 
-    idx_t presumeNq = 10000, presumeK = 1000;
+    // idx_t presumeNq = 370, 
+    idx_t presumeK = 100;
     std::vector<std::unique_ptr<float[]>> distancesHeapBuffer;
     std::vector<std::unique_ptr<idx_t[]>> labelsHeapBuffer;
 
@@ -128,6 +143,8 @@ class Index {
     SearchOrder groupSearchOrder, blockSearchOrder;
     vector<size_t> beginIVFs;
     vector<size_t> ivfCounts;
+    std::unique_ptr<idx_t[]> listidqueries;
+    double trainTime = 0, addTime = 0, preSearchTime = 0;
 };
 
 }  // namespace tribase
