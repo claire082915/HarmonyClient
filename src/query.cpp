@@ -737,63 +737,63 @@ int main(int argc, char* argv[]) {
                     Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), &oriParam);
 
                     std::cout << YELLOW;
-                    // oriStat.print();
+                    oriStat.print();
                     std::cout << RESET;
 
                     // if(searchMode != Index::SearchMode::ORIGINAL) {
-                    // MPI_Barrier(MPI_COMM_WORLD);
-                    // // }
-                    // // std::cout << YELLOW;
+                    MPI_Barrier(MPI_COMM_WORLD);
+                    // }
+                    // std::cout << YELLOW;
 
-                    // Index::Param param;
-                    // param.orderOptimize = !disableOrderOptimize;
-                    // param.mode = searchMode;
-                    // // param.period = period;
-                    // param.cut = cut;
-                    // param.fullWarmUp = fullWarmUp;
-                    // param.groupCount = groupCount;
-                    // param.teamCount = teamCount;
-                    // param.teamSize = teamSize;
-                    // param.hardInBalance = hardInBalance;
-                    // param.hardInBalanceTeam = hardInBalanceTeam;
-                    // param.hardInBalanceRatio = inBalanceRatio;
-                    // auto heapTops = std::make_unique<float[]>(nq); 
-                    // if(param.fullWarmUp) {
-                    //     cout << YELLOW << "Full Warm Up!" << RESET << endl;
-                    //     param.heapTops = heapTops.get();
-                    //     for(int q = 0; q < nq; q++){
-                    //         param.heapTops[q] = ground_truth_D[q * k + k - 1];
-                    //         // printVector(ground_truth_D.get() + q * k, k, MAG);
-                    //     }   
-                    //     // printVector(param.heapTops, nq, BLUE);
-                    // }
+                    Index::Param param;
+                    param.orderOptimize = !disableOrderOptimize;
+                    param.mode = searchMode;
+                    // param.period = period;
+                    param.cut = cut;
+                    param.fullWarmUp = fullWarmUp;
+                    param.groupCount = groupCount;
+                    param.teamCount = teamCount;
+                    param.teamSize = teamSize;
+                    param.hardInBalance = hardInBalance;
+                    param.hardInBalanceTeam = hardInBalanceTeam;
+                    param.hardInBalanceRatio = inBalanceRatio;
+                    auto heapTops = std::make_unique<float[]>(nq); 
+                    if(param.fullWarmUp) {
+                        cout << YELLOW << "Full Warm Up!" << RESET << endl;
+                        param.heapTops = heapTops.get();
+                        for(int q = 0; q < nq; q++){
+                            param.heapTops[q] = ground_truth_D[q * k + k - 1];
+                            // printVector(ground_truth_D.get() + q * k, k, MAG);
+                        }   
+                        // printVector(param.heapTops, nq, BLUE);
+                    }
 
-                    // // if (param.mode != Index::SearchMode::ORIGINAL) {
-                    // Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), &param);
-                    // // stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
-                    // // cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
-                    // auto ivfCalculatedCount = vector<int>(nlist, 0);
-                    // for(int i = 0; i < nprobe * nq; i++) {
-                    //     ivfCalculatedCount[index.listidqueries[i]]++;
-                    // }
-                    // double average = (double)nprobe * nq / nlist;
-                    // double variance = 0;
-                    // for(int i = 0; i < nlist; i++){
-                    //     variance += (ivfCalculatedCount[i] - average) * (ivfCalculatedCount[i] - average);
-                    // }
-                    // variance /= nlist;
-                    // variance = sqrt(variance);
-                    // stat.variance = variance;
-                    // // printVector(ivfCalculatedCount, BLUE, format("方差 {} 平均{}",variance, average));
-                    // cout << MAG << format("Speed up ratio compared to faiss : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
-                    // // stat.original_time = oriStat.query_time;
-                    // stat.original_time = stat.faiss_query_time;
-                    // stat.trainTime = index.trainTime;
-                    // stat.addTime = index.addTime;
-                    // stat.preSearchTime = index.preSearchTime;
-                    // stat.print();
-                    // // stat.myToCsv(log_path, true, dataset);
-                    // stat.myToCsv(log_path, true, dataset + inBalanceString);
+                    // if (param.mode != Index::SearchMode::ORIGINAL) {
+                    Stats stat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distancesB.get(), labelsB.get(), &param);
+                    // stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
+                    // cout << MAG << format("Speed up ratio compared to original version : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
+                    auto ivfCalculatedCount = vector<int>(nlist, 0);
+                    for(int i = 0; i < nprobe * nq; i++) {
+                        ivfCalculatedCount[index.listidqueries[i]]++;
+                    }
+                    double average = (double)nprobe * nq / nlist;
+                    double variance = 0;
+                    for(int i = 0; i < nlist; i++){
+                        variance += (ivfCalculatedCount[i] - average) * (ivfCalculatedCount[i] - average);
+                    }
+                    variance /= nlist;
+                    variance = sqrt(variance);
+                    stat.variance = variance;
+                    // printVector(ivfCalculatedCount, BLUE, format("方差 {} 平均{}",variance, average));
+                    cout << MAG << format("Speed up ratio compared to faiss : {:.2f}", stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
+                    // stat.original_time = oriStat.query_time;
+                    stat.original_time = stat.faiss_query_time;
+                    stat.trainTime = index.trainTime;
+                    stat.addTime = index.addTime;
+                    stat.preSearchTime = index.preSearchTime;
+                    stat.print();
+                    // stat.myToCsv(log_path, true, dataset);
+                    stat.myToCsv(log_path, true, dataset + inBalanceString);
                     // } 
                     // for(int i = 0; i < nq; i++) {
                         // if(diffVector(labels.get() + i * k, labelsB.get() + i * k, k)) {
