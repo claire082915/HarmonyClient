@@ -2,8 +2,6 @@
 
 ## Introduction
 
-Tribase is an vector ANN query engine that employs a novel pruning technique based on the triangle inequality. This technique significantly reduces query time without sacrificing accuracy. Tribase supports various pruning strategies at different granularities, allowing it to achieve better performance across different datasets.
-
 ## Dataset
 
 We have prepared some tiny datasets for testing in benchmarks folder. You can download the large datasets from the following links:
@@ -45,11 +43,10 @@ We also provide a dockerfile based on Ubuntu22.04 with all the dependencies inst
 ```bash
 docker build -t tribase .
 docker run -it tribase
-./release/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
-  --nprobes 50 100 300 1000 --run_faiss --verbose
-./release/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
-  --opt_levels OPT_TRIANGLE OPT_TRI_SUBNN_L2 OPT_TRI_SUBNN_IP OPT_ALL \
-  --nprobes 50 100 300 1000 --cache --loop 3 --verbose
+mpirun -n 1 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --run_faiss --verbose
+mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --opt_levels OPT_NONE    --mode block --block=8
+mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --opt_levels OPT_NONE    --mode group --group=2 --team=2 --block=4 
+mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --opt_levels OPT_NONE    --mode base 
 ```
 
 ## How to Run
@@ -72,6 +69,7 @@ If you want to build the project on your own machine, you should install the fol
 - openblas
 - intel-mkl = 2024.2.0-663
 - Eigen3
+- MPI
 
 ### Build
 
@@ -96,30 +94,12 @@ We have prepared a fully functional script named `query` for conducting benchmar
 As a baseline and to generate ground truth, we use faiss-ivfflat. You may execute run_faiss once to obtain baseline values.
 
 ```bash
-./release/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
+mpirun -n 1 ./release/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
   --nprobes 50 100 300 1000 --run_faiss --verbose
 ```
 
 #### Tribase Index Generation
 
-Subsequently, you can run our Tribase algorithm, which supports various combinations of three strategies. You can specify these by using the `--opt_levels` parameter, separating multiple strategies with spaces. During training, we will use the union of these strategies and individually test the query performance of each.
-
-The available strategies are as follows:
-
-- `OPT_NONE`
-- `OPT_TRIANGLE`
-- `OPT_SUBNN_L2`
-- `OPT_SUBNN_IP`
-- `OPT_TRI_SUBNN_L2`
-- `OPT_TRI_SUBNN_IP`
-- `OPT_ALL`
-
-You can generate a Tribase index that supports various strategies with the following command, where the `--sub_nprobe_ratio` parameter is used to specify the nprobe ratio for the sub-index, affecting the index quality and construction speed. `1` denotes the highest quality.
-
-```bash
-./release/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
-  --opt_levels OPT_ALL --sub_nprobe_ratio 0.3 --train_only --verbose
-```
 
 #### Tribase Query Performance
 
@@ -159,30 +139,44 @@ Finally, you can use the following command to get a more comprehensive usage gui
 ```bash
 ./release/bin/query --help
 
-Usage: tribase [--help] [--version] [--benchmarks_path VAR] [--dataset VAR] [--input_format VAR] [--output_format VAR] [--k VAR] [--nprobes VAR...] [--opt_levels VAR...] [--train_only] [--cache] [--sub_nprobe_ratio VAR] [--metric VAR] [--run_faiss] [--loop VAR] [--nlist VAR] [--verbose] [--ratios VAR...] [--csv VAR] [--dataset_info] [--early_stop]
+Usage: tribase [--help] [--version] [--benchmarks_path VAR] [--dataset VAR] [--input_format VAR] [--output_format VAR] [--k VAR] [--nprobes VAR...] [--opt_levels VAR...] [--train_only] [--cache] [--sub_nprobe_ratio VAR] [--metric VAR] [--run_faiss] [--loop VAR] [--nlist VAR] [--verbose] [--ratios VAR...] [--csv VAR] [--dataset_info] [--early_stop] [--block VAR] [--warmup_list_size VAR] [--warmup_list VAR] [--cut] [--disableOrderOpt] [--inBalance] [--blockSend] [--fullWarmUp] [--group VAR] [--team VAR] [--mode VAR] [--HardInBalance] [--HardInBalanceRatio VAR] [--HardInBalanceTeam VAR]
 
 Optional arguments:
-  -h, --help          shows help message and exits 
-  -v, --version       prints version information and exits 
-  --benchmarks_path   benchmarks path [nargs=0..1] [default: "/home/xuqian/Triangle/benchmarks"]
-  --dataset           dataset name [nargs=0..1] [default: "msong"]
-  --input_format      format of the dataset [nargs=0..1] [default: "fvecs"]
-  --output_format     format of the output [nargs=0..1] [default: "bin"]
-  --k                 number of nearest neighbors [nargs=0..1] [default: 100]
-  --nprobes           number of clusters to search [nargs=0..100] [default: {0}]
-  --opt_levels        optimization levels [nargs=0..10] [default: {"OPT_NONE" "OPT_TRIANGLE" "OPT_SUBNN_L2" "OPT_SUBNN_IP"..."OPT_ALL"}]
-  --train_only        train only 
-  --cache             use cached index 
-  --sub_nprobe_ratio  ratio of the number of subNNs to the number of clusters [nargs=0..1] [default: 1]
-  --metric            metric type [nargs=0..1] [default: "l2"]
-  --run_faiss         run faiss 
-  --loop              [nargs=0..1] [default: 1]
-  --nlist             [nargs=0..1] [default: 0]
-  --verbose           verbose 
-  --ratios            search ratio [nargs=0..100] [default: {1}]
-  --csv               csv result file [nargs=0..1] [default: ""]
-  --dataset_info      only output dataset-info to csv file 
-  --early_stop        early stop
+  -h, --help            shows help message and exits 
+  -v, --version         prints version information and exits 
+  --benchmarks_path     benchmarks path [nargs=0..1] [default: "/home/xuqian/Triangle/benchmarks"]
+  --dataset             dataset name [nargs=0..1] [default: "msong"]
+  --input_format        format of the dataset [nargs=0..1] [default: "fvecs"]
+  --output_format       format of the output [nargs=0..1] [default: "bin"]
+  --k                   number of nearest neighbors [nargs=0..1] [default: 100]
+  --nprobes             number of clusters to search [nargs=0..100] [default: {0}]
+  --opt_levels          optimization levels [nargs=0..10] [default: {"OPT_NONE" "OPT_TRIANGLE" "OPT_SUBNN_L2" "OPT_SUBNN_IP"..."OPT_ALL"}]
+  --train_only          train only 
+  --cache               use cached index 
+  --sub_nprobe_ratio    ratio of the number of subNNs to the number of clusters [nargs=0..1] [default: 1]
+  --metric              metric type [nargs=0..1] [default: "l2"]
+  --run_faiss           run faiss 
+  --loop                [nargs=0..1] [default: 1]
+  --nlist               [nargs=0..1] [default: 0]
+  --verbose             verbose 
+  --ratios              search ratio [nargs=0..100] [default: {1}]
+  --csv                 csv result file [nargs=0..1] [default: ""]
+  --dataset_info        only output dataset-info to csv file 
+  --early_stop          early stop 
+  --block               number of blocks [nargs=0..1] [default: 0]
+  --warmup_list_size    how many vectors in a list are used to warmup heap [nargs=0..1] [default: 0]
+  --warmup_list         how many lists are used to warmup heap [nargs=0..1] [default: 0]
+  --cut                 set pruning enabled 
+  --disableOrderOpt     disable block search order optimization 
+  --inBalance           
+  --blockSend           use blocking MPI_Send instead of unblocking MPI_Isend with search phase 
+  --fullWarmUp          use groundtruth to warmup heap 
+  --group               The number of groups the nq query vectors need to be divided into. [nargs=0..1] [default: 1]
+  --team                The number of teams the workers need to be divided into. Each team handles an individual part of base vectors [nargs=0..1] [default: 1]
+  --mode                The mode of search [nargs=0..1] [default: "original"]
+  --HardInBalance       enable hard inBalance 
+  --HardInBalanceRatio  control how inbalanced the search would be, 0.0 is perfectly balanced [nargs=0..1] [default: 1]
+  --HardInBalanceTeam   number of Hard InBalance Team [nargs=0..1] [default: 0]
 ```
 
 ## Usage in Your Own Project
