@@ -5,7 +5,6 @@ set(SRC_FILES
     Index.cpp
     IVF.cpp
     node.cpp
-    divide.cpp
     # utils.cpp
 )
 

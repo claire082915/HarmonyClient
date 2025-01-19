@@ -1,4 +1,4 @@
-# Tribase: A Vector Data Query Engine for Reliable and Lossless Pruning Compression using Triangle Inequalities
+# HARMONY: A Scalable Distributed Vector Database for High-Throughput Approximate Nearest Neighbor Search
 
 ## Introduction
 
@@ -20,8 +20,8 @@ You can prepare your own dataset in the following format, place it in the benchm
 benchmark
 |-- nuswide
 |   |-- origin
-|   |   |-- nuswide_base.fvecs
-|   |   |-- nuswide_query.fvecs
+|   |   |-- msong_base.fvecs
+|   |   |-- msong_query.fvecs
 ```
 
 fvecs file format is as follows:
@@ -41,24 +41,14 @@ We also provide a dockerfile based on Ubuntu22.04 with all the dependencies inst
 ## Quick Start
 
 ```bash
-docker build -t tribase .
-docker run -it tribase
+cmake -B release -DCMAKE_BUILD_TYPE=Release .
+cmake --build release -j
+
 mpirun -n 1 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --run_faiss --verbose
-mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --opt_levels OPT_NONE    --mode block --block=8
-mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --opt_levels OPT_NONE    --mode group --group=2 --team=2 --block=4 
-mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --opt_levels OPT_NONE    --mode base 
+mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --group=2 --team=2 --block=4 
 ```
 
 ## How to Run
-
-### Docker
-
-We highly recommend using the provided Dockerfile to build the project, just run the following commands:
-
-```bash
-docker build -t tribase .
-docker run -it tribase
-```
 
 ### Manual Installation
 
@@ -67,13 +57,11 @@ If you want to build the project on your own machine, you should install the fol
 - build-essential (g++ >= 13.2.0)
 - cmake
 - openblas
-- intel-mkl = 2024.2.0-663
+- intel-mkl = 2024.1
 - Eigen3
 - MPI
 
 ### Build
-
-Dockerfile will automatically build the project, but if you want to build it manually, you can use the following commands:
 
 ```bash
 cmake -B release -DCMAKE_BUILD_TYPE=Release .
@@ -94,43 +82,27 @@ We have prepared a fully functional script named `query` for conducting benchmar
 As a baseline and to generate ground truth, we use faiss-ivfflat. You may execute run_faiss once to obtain baseline values.
 
 ```bash
-mpirun -n 1 ./release/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
+mpirun -n 1 ./release/bin/query --benchmarks_path ./benchmarks --dataset msong \
   --nprobes 50 100 300 1000 --run_faiss --verbose
 ```
 
-#### Tribase Index Generation
-
-
-#### Tribase Query Performance
-
-Next, you can test the query performance of the Tribase index with the following command, `--cache` is used to use the cached index, and `--loop` is used to specify the number of loops for each query.
+#### Harmony Index Generation
 
 ```bash
-./release/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
-  --opt_levels OPT_TRIANGLE OPT_TRI_SUBNN_L2 OPT_TRI_SUBNN_IP OPT_ALL \
-  --nprobes 50 100 300 1000 --cache --loop 3 --verbose
+./release/bin/query --benchmarks_path ./benchmarks --dataset msong --train_only --verbose
 ```
 
-To obtain accurate pruning rates, it is necessary to introduce some atomic operations, which may result in a decrease in performance. You can run the following command in standard mode to output this information:
+#### Harmony Query Performance
+
+Next, you can test the query performance with the following command, by default harmony use hybrid partitioning, specifying `--mode dim` tells harmony to use dimension partitioning, specifying `--mode vector` tells harmony to use vector partitioning. `--cache` is used to use the cached index. You can use `--blockSend`, `--disableOrderOpt`, `--disablePruning` to disable corresponding optimization.
 
 ```bash
-./build/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
-  --opt_levels OPT_TRIANGLE OPT_TRI_SUBNN_L2 OPT_TRI_SUBNN_IP OPT_ALL \
-  --nprobes 50 100 300 1000 --cache --verbose
+mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset sift1m  --cache --block=4 --group=2 --team=2  --disablePruning
+mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --mode dim --block=8
+mpirun -n 5 -bind-to none ./release/bin/query --benchmarks_path ./benchmarks --dataset msong  --mode vector 
 ```
 
 After running the above commands, you can check the results in `benchmarks/nuswide/result/log.csv`.
-
-#### Average Distance Ratio
-
-r2 (or Average Distance Ratio in paper) is a metric that measures the average distance ratio between the query result and the ground truth. By adjusting the `--ratios` parameter, you can obtain the r2 results for different search pruning ratios.
-
-```bash
-./build/bin/query --benchmarks_path ./benchmarks --dataset nuswide \
-  --opt_levels OPT_TRIANGLE OPT_TRI_SUBNN_L2 OPT_TRI_SUBNN_IP OPT_ALL \
-  --nprobes 50 100 300 1000 --ratios 1.0 0.95 0.9 0.85 0.8 0.75 0.7 \
-  --cache --verbose
-```
 
 #### Further Usage
 
@@ -139,7 +111,7 @@ Finally, you can use the following command to get a more comprehensive usage gui
 ```bash
 ./release/bin/query --help
 
-Usage: tribase [--help] [--version] [--benchmarks_path VAR] [--dataset VAR] [--input_format VAR] [--output_format VAR] [--k VAR] [--nprobes VAR...] [--opt_levels VAR...] [--train_only] [--cache] [--sub_nprobe_ratio VAR] [--metric VAR] [--run_faiss] [--loop VAR] [--nlist VAR] [--verbose] [--ratios VAR...] [--csv VAR] [--dataset_info] [--early_stop] [--block VAR] [--warmup_list_size VAR] [--warmup_list VAR] [--cut] [--disableOrderOpt] [--inBalance] [--blockSend] [--fullWarmUp] [--group VAR] [--team VAR] [--mode VAR] [--HardInBalance] [--HardInBalanceRatio VAR] [--HardInBalanceTeam VAR]
+Usage: harmony [--help] [--version] [--benchmarks_path VAR] [--dataset VAR] [--input_format VAR] [--output_format VAR] [--k VAR] [--nprobes VAR...] [--opt_levels VAR...] [--train_only] [--cache] [--sub_nprobe_ratio VAR] [--metric VAR] [--run_faiss] [--loop VAR] [--nlist VAR] [--verbose] [--ratios VAR...] [--csv VAR] [--dataset_info] [--early_stop] [--block VAR] [--warmup_list_size VAR] [--warmup_list VAR] [--disablePruning] [--disableOrderOpt] [--inBalance] [--blockSend] [--fullWarmUp] [--group VAR] [--team VAR] [--mode VAR] [--HardInBalance] [--HardInBalanceRatio VAR] [--HardInBalanceTeam VAR]
 
 Optional arguments:
   -h, --help            shows help message and exits 
@@ -150,7 +122,7 @@ Optional arguments:
   --output_format       format of the output [nargs=0..1] [default: "bin"]
   --k                   number of nearest neighbors [nargs=0..1] [default: 100]
   --nprobes             number of clusters to search [nargs=0..100] [default: {0}]
-  --opt_levels          optimization levels [nargs=0..10] [default: {"OPT_NONE" "OPT_TRIANGLE" "OPT_SUBNN_L2" "OPT_SUBNN_IP"..."OPT_ALL"}]
+  --opt_levels          optimization levels [nargs=0..10] [default: {"OPT_NONE"}]
   --train_only          train only 
   --cache               use cached index 
   --sub_nprobe_ratio    ratio of the number of subNNs to the number of clusters [nargs=0..1] [default: 1]
@@ -166,117 +138,19 @@ Optional arguments:
   --block               number of blocks [nargs=0..1] [default: 0]
   --warmup_list_size    how many vectors in a list are used to warmup heap [nargs=0..1] [default: 0]
   --warmup_list         how many lists are used to warmup heap [nargs=0..1] [default: 0]
-  --cut                 set pruning enabled 
+  --disablePruning      set pruning disabled 
   --disableOrderOpt     disable block search order optimization 
   --inBalance           
   --blockSend           use blocking MPI_Send instead of unblocking MPI_Isend with search phase 
   --fullWarmUp          use groundtruth to warmup heap 
   --group               The number of groups the nq query vectors need to be divided into. [nargs=0..1] [default: 1]
   --team                The number of teams the workers need to be divided into. Each team handles an individual part of base vectors [nargs=0..1] [default: 1]
-  --mode                The mode of search [nargs=0..1] [default: "original"]
+  --mode                The mode of search [nargs=0..1] [default: "hybrid"]
   --HardInBalance       enable hard inBalance 
   --HardInBalanceRatio  control how inbalanced the search would be, 0.0 is perfectly balanced [nargs=0..1] [default: 1]
   --HardInBalanceTeam   number of Hard InBalance Team [nargs=0..1] [default: 0]
 ```
 
-## Usage in Your Own Project
-
-You can use the Tribase index in your own project by including the `src/tribase.h` header file and linking the `tribase` library. The following is a tiny example of how to use the Tribase index in your project.
-
-```cpp
-#include "tribase.h"
-#include <cmath>
-#include <memory>
-
-int main(){
-    auto [base, nb, d] = tribase::loadFvecs("base.fvecs");
-    auto [query, nq, _] = tribase::loadFvecs("query.fvecs");
-    int nlist = sqrt(nb);
-    int nprobe = std::max(1, nlist / 10);
-    tribase::Index index;
-    // index.load_index("example.index");
-    index = tribase::Index(d, nb, base, tribase::METRIC_L2, tribase::OPT_ALL);
-    index.train(nb, d, base);
-    index.add(nb, base.get());
-    index.save_index("example.index");
-    int k = 100; // number of nearest neighbors
-    std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
-    std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
-    index.search(nq, query.get(), k, distances.get(), labels.get());
-    return 0;
-}
-```
-
-## trifaiss
-
-We also provide a modified version of faiss that supports the triangle inequality pruning strategy. You can find the source code in the `trifaiss` folder. 
-
-We still highly recommend using the provided Dockerfile to build the project, after entering the docker container, you can simply run the following commands:
-
-```bash
-source venv/bin/activate
-cd trifaiss
-python run.py
-```
-
-### Build
-
-To build the trifaiss, you should install the following dependencies in addition to the ones mentioned above:
-
-- swig = 4.2.0
-- python packages: setuptools, numpy, pandas, tqdm
-
-Then, you can build the trifaiss library with the following commands:
-
-```bash
-source venv/bin/activate
-cd trifaiss
-cmake -B build -DCMAKE_BUILD_TYPE=Release .
-make -j -C build swigfaiss
-python setup.py install
-```
-
-### Run
-
-You can simply use `run.py` script to test our trifaiss.
-
-You can modify the parameters in `main` function, most of the parameters are the same as the `query` script in Tribase.
-
-```bash
-source venv/bin/activate
-cd trifaiss
-python run.py
-```
-
-### Simple Usage
-
-```python
-import faiss # trifaiss version
-import numpy as np
-
-xb = load_vecs(base_path)
-xq = load_vecs(query_path)
-n = xb.shape[0]
-d = xb.shape[1]
-nlist = int(np.sqrt(n))
-quantizer = faiss.IndexFlatL2(d)
-index = faiss.IndexIVFwithDistance(
-    quantizer, d, nlist, faiss.METRIC_L2
-)
-index.train(xb)
-index.add(xb)
-index.nprobe = nlist // 10
-k = 100
-distances, labels = index.search(xq, k)
-```
-
-## TriHNSW
-
-We also applied triangular pruning to the HNSW algorithm. It is important to note that this represents a completely different pruning logic and in practical testing, it can achieve lossless results. For more detailed conclusions and performance analysis, please refer to Section 4.6 in the paper. Below is the method for executing the TriHNSW tests.
-
-```bash
-./build/bin/hnswlib_test
-```
 
 ## License
 

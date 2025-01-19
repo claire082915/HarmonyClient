@@ -48,7 +48,7 @@ int workerMain(int rank, bool cut, Index::SearchMode mode, bool blockSend) {
 }
 int main(int argc, char* argv[]) {
     
-    argparse::ArgumentParser program("tribase");
+    argparse::ArgumentParser program("harmony");
     program.add_argument("--benchmarks_path")
         .help("benchmarks path")
         .default_value(std::string("/home/xuqian/Triangle/benchmarks"));
@@ -65,8 +65,7 @@ int main(int argc, char* argv[]) {
         .help("number of clusters to search")
         .scan<'u', size_t>();
     program.add_argument("--opt_levels")
-        .default_value(std::vector<std::string>({"OPT_NONE", "OPT_TRIANGLE", "OPT_SUBNN_L2", "OPT_SUBNN_IP",
-                                                    "OPT_TRI_SUBNN_L2", "OPT_TRI_SUBNN_IP", "OPT_ALL"}))
+        .default_value(std::vector<std::string>({"OPT_NONE"}))
         .nargs(0, 10)
         .help("optimization levels");
     program.add_argument("--train_only").default_value(false).implicit_value(true).help("train only");
@@ -114,8 +113,8 @@ int main(int argc, char* argv[]) {
         .help("how many lists are used to warmup heap")
         .default_value(0ul)
         .action([](const std::string& value) -> size_t { return std::stoul(value); });
-    program.add_argument("--cut")
-        .help("set pruning enabled")
+    program.add_argument("--disablePruning")
+        .help("set pruning disabled")
         .default_value(false)
         .implicit_value(true);
     program.add_argument("--disableOrderOpt")
@@ -150,8 +149,8 @@ int main(int argc, char* argv[]) {
         .action([](const std::string& value) -> size_t { return std::stoul(value); });
     program.add_argument("--mode")
            .help("The mode of search")
-           .default_value(std::string("original"))
-           .choices("base", "group", "block", "original"); // Only these choices are valid
+           .default_value(std::string("hybrid"))
+           .choices("vector", "dim", "hybrid"); // Only these choices are valid
     program.add_argument("--HardInBalance")
         .help("enable hard inBalance")
         .default_value(false)
@@ -187,7 +186,7 @@ int main(int argc, char* argv[]) {
 
     // bool divideIVF = program.get<bool>("divideIVF");
     bool disableOrderOptimize = program.get<bool>("disableOrderOpt");
-    bool cut = program.get<bool>("cut");
+    bool cut = !program.get<bool>("--disablePruning");
     bool run_faiss = program.get<bool>("run_faiss");
     // bool period = program.get<bool>("period");
     bool inBalance = program.get<bool>("inBalance");
@@ -212,22 +211,15 @@ int main(int argc, char* argv[]) {
 
     std::string mode = program.get<std::string>("--mode");
     Index::SearchMode searchMode = Index::SearchMode::DIVIDE_GROUP;
-    if(mode == "original") {
-        cout << YELLOW << "Mode: Original" << RESET << endl;
-        searchMode = Index::SearchMode::ORIGINAL;
-        if(workerCount > 0) {
-            cerr << "worker should be 0" << endl;
-            return 1;
-        }
-    } else if (mode == "block") {
-        cout << YELLOW << "Mode: Block" << RESET << endl;
+    if (mode == "dim") {
+        cout << YELLOW << "Mode: Dim" << RESET << endl;
         searchMode = Index::SearchMode::DIVIDE_DIM;
-    } else if (mode == "base") {
-        cout << YELLOW << "Mode: Baseline" << RESET << endl;
+    } else if (mode == "vector") {
+        cout << YELLOW << "Mode: Vector" << RESET << endl;
         groupCount = workerCount;
         searchMode = Index::SearchMode::DIVIDE_IVF;
     } else {
-        cout << YELLOW << "Mode: Group" << RESET << endl;
+        cout << YELLOW << "Mode: Hybrid" << RESET << endl;
         searchMode = Index::SearchMode::DIVIDE_GROUP;
     }
 
@@ -269,17 +261,17 @@ int main(int argc, char* argv[]) {
         }
     } else {
         // MyStopWatch watch(true, "queryWatch", CRAN);
-        if (job_id && node_list && num_nodes) {
-            std::cout << "Job ID: " << job_id << std::endl;
-            std::cout << "Nodes List: " << node_list << std::endl;
-            std::cout << "Number of Nodes: " << num_nodes << std::endl;
-        } 
+        // if (job_id && node_list && num_nodes) {
+        //     std::cout << "Job ID: " << job_id << std::endl;
+        //     std::cout << "Nodes List: " << node_list << std::endl;
+        //     std::cout << "Number of Nodes: " << num_nodes << std::endl;
+        // } 
 
-        std::cout << "Arguments passed to the program:" << std::endl;
-        for (int i = 0; i < argc; i++) {
-            std::cout << argv[i] << " ";
-        }
-        cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
+        // std::cout << "Arguments passed to the program:" << std::endl;
+        // for (int i = 0; i < argc; i++) {
+        //     std::cout << argv[i] << " ";
+        // }
+        // cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
         
         std::vector<size_t> nprobes = program.get<std::vector<size_t>>("nprobes");
         std::vector<std::string> opt_levels_str = program.get<std::vector<std::string>>("opt_levels");
@@ -734,10 +726,10 @@ int main(int argc, char* argv[]) {
 
                     Index::Param oriParam;
                     oriParam.mode = Index::SearchMode::ORIGINAL;
-                    Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), &oriParam);
+                    // Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(), labels.get(), &oriParam);
 
                     std::cout << YELLOW;
-                    oriStat.print();
+                    // oriStat.print();
                     std::cout << RESET;
 
                     // if(searchMode != Index::SearchMode::ORIGINAL) {
