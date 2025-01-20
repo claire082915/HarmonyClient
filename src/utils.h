@@ -3,7 +3,8 @@
 #include <mkl.h>
 // #include <mkl_cblas.h>
 #include <immintrin.h>  // 包含AVX2和其他SIMD指令集的头文件
-#include <algorithm>    // 包含std::fill_n
+
+#include <algorithm>  // 包含std::fill_n
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -18,28 +19,28 @@
 #include <utility>
 #include <vector>
 // #include "avx512.h"
+#include <cmath>
+#include <random>
+
 #include "common.h"
 #include "faiss/faiss/utils/distances.h"
 #include "platform_macros.h"
-#include <random>
-#include <cmath>
 
 namespace harmony {
-    const std::string BLUE = "\033[1;34m"; // Blue text
-    const std::string YELLOW = "\033[1;33m"; // Blue text
-    const std::string GREEN = "\033[1;32m"; // Blue text
-    const std::string CRAN = "\033[1;36m"; // Blue text
-    const std::string MAG = "\033[1;35m"; // Blue text
-    const std::string RED = "\033[1;31m"; // Blue text
-    const std::string RESET = "\033[0m"; // Reset color
-
+const std::string BLUE = "\033[1;34m";    // Blue text
+const std::string YELLOW = "\033[1;33m";  // Blue text
+const std::string GREEN = "\033[1;32m";   // Blue text
+const std::string CRAN = "\033[1;36m";    // Blue text
+const std::string MAG = "\033[1;35m";     // Blue text
+const std::string RED = "\033[1;31m";     // Blue text
+const std::string RESET = "\033[0m";      // Reset color
 
 // void copyPartialVector(const float* const src, float* dest, size_t id_start, size_t ) {
 
 // }
 
 class CsvWriter {
-   private:
+private:
     std::ofstream file_;
     std::string filename_;
     std::vector<std::string> headers_;
@@ -47,7 +48,7 @@ class CsvWriter {
     bool isAppend_ = false;
     bool echo_ = false;
 
-   public:
+public:
     CsvWriter() = default;
     CsvWriter(const std::string& filename, bool isAppend = true, bool echo = true)
         : filename_(filename), isAppend_(isAppend), echo_(echo) {
@@ -60,7 +61,8 @@ class CsvWriter {
             throw std::runtime_error("Failed to open file: " + filename);
         }
     }
-    CsvWriter(const std::string& filename, const std::vector<std::string>& headers, bool isAppend = true, bool echo = true)
+    CsvWriter(const std::string& filename, const std::vector<std::string>& headers, bool isAppend = true,
+              bool echo = true)
         : filename_(filename), headers_(headers), isAppend_(isAppend), echo_(echo) {
         if (isAppend && std::filesystem::exists(filename)) {
             file_.open(filename, std::ios::app);
@@ -83,9 +85,7 @@ class CsvWriter {
     }
     CsvWriter(const CsvWriter&) = delete;
     CsvWriter& operator=(const CsvWriter&) = delete;
-    ~CsvWriter() {
-        file_.close();
-    }
+    ~CsvWriter() { file_.close(); }
     void setHeader(const std::vector<std::string>& headers) {
         headers_ = headers;
         for (size_t i = 0; i < headers.size(); ++i) {
@@ -96,9 +96,7 @@ class CsvWriter {
         }
         file_ << std::endl;
     }
-    std::ofstream& getFile() {
-        return file_;
-    }
+    std::ofstream& getFile() { return file_; }
     template <typename T>
     CsvWriter& operator<<(const T& value) {
         if (file_) {
@@ -107,8 +105,8 @@ class CsvWriter {
                 if (echo_) {
                     std::cout << ",";
                 }
-            }else{
-                if(echo_){
+            } else {
+                if (echo_) {
                     std::cout << filename_ << ":\t";
                 }
             }
@@ -142,27 +140,24 @@ class CsvWriter {
 };
 template <typename T>
 inline void copy_n_partial_vector(const T* from, T* to, size_t dFrom, size_t dTo, size_t offset, size_t n) {
-    for(size_t vectorIndex = 0; vectorIndex < n;vectorIndex++) {
-        std::copy_n(from + vectorIndex * dFrom + offset, 
-            dTo,
-            to + vectorIndex * dTo);
+    for (size_t vectorIndex = 0; vectorIndex < n; vectorIndex++) {
+        std::copy_n(from + vectorIndex * dFrom + offset, dTo, to + vectorIndex * dTo);
     }
 }
 
 template <typename T>
 inline void add_n(const T* src1, const T* src2, T* dest, size_t n) {
-
-size_t nt = omp_get_max_threads();
+    size_t nt = omp_get_max_threads();
 #pragma omp parallel for num_threads(nt)
-    for(size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; i++) {
         dest[i] = src1[i] + src2[i];
     }
 }
 template <typename T>
 inline bool diffVector(const T* const v1, const T* const v2, size_t d) {
     using namespace std;
-    for(size_t i = 0; i < d; i++) {
-        if(v1[i] != v2[i]) {
+    for (size_t i = 0; i < d; i++) {
+        if (v1[i] != v2[i]) {
             return true;
         }
     }
@@ -172,7 +167,7 @@ template <typename T>
 inline void printVector(std::vector<T>& v, std::string color, std::string str = "") {
     using namespace std;
     std::cout << color << str << "[";
-    for(size_t i = 0; i < v.size(); i++) {
+    for (size_t i = 0; i < v.size(); i++) {
         cout << v[i] << " ";
     }
     cout << "]";
@@ -183,7 +178,7 @@ template <typename T>
 inline void printVector(const T* const from, size_t d, std::string color, std::string str = "") {
     using namespace std;
     std::cout << color << str << "[";
-    for(size_t i = 0; i < d; i++) {
+    for (size_t i = 0; i < d; i++) {
         cout << from[i] << " ";
     }
     cout << "]";
@@ -209,7 +204,8 @@ inline std::pair<size_t, int> loadFvecsInfo(const std::string& filePath) {
     return {n, d};
 }
 
-inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadFvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
+inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadFvecs(const std::string& filePath,
+                                                                   std::pair<int, int> bounds = {1, 0}) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
@@ -249,8 +245,8 @@ inline std::pair<size_t, int> loadTvecsInfo(const std::string& filePath) {
         return {};
     }
 
-    size_t m = 0; 
-    int d = 0;    
+    size_t m = 0;
+    int d = 0;
 
     std::string line;
     while (std::getline(file, line)) {
@@ -265,18 +261,17 @@ inline std::pair<size_t, int> loadTvecsInfo(const std::string& filePath) {
         }
 
         if (m == 0) {
-            d = current_d; 
+            d = current_d;
         }
 
-        m++; 
+        m++;
     }
-    if(d == 2709) {
+    if (d == 2709) {
         d = 2712;
         return {m * 600, d};
     }
     return {m * 100, d};
 }
-
 
 inline std::pair<size_t, int> loadBvecsInfo(const std::string& filePath) {
     std::ifstream file(filePath, std::ios::binary);
@@ -295,7 +290,8 @@ inline std::pair<size_t, int> loadBvecsInfo(const std::string& filePath) {
     return {n, d};
 }
 
-inline std::tuple<std::unique_ptr<uint8_t[]>, size_t, int> loadBvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
+inline std::tuple<std::unique_ptr<uint8_t[]>, size_t, int> loadBvecs(const std::string& filePath,
+                                                                     std::pair<int, int> bounds = {1, 0}) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
@@ -330,7 +326,8 @@ inline std::tuple<std::unique_ptr<uint8_t[]>, size_t, int> loadBvecs(const std::
     return std::make_tuple(std::move(vectors), n, d);
 }
 
-inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadBvecs2Fvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
+inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadBvecs2Fvecs(const std::string& filePath,
+                                                                         std::pair<int, int> bounds = {1, 0}) {
     auto [vectors, n, d] = loadBvecs(filePath, bounds);
     std::unique_ptr<float[]> vectors2 = std::make_unique<float[]>(n * d);
 #pragma omp parallel for
@@ -350,18 +347,19 @@ inline std::pair<size_t, int> loadXvecsInfo(const std::string& filePath) {
     } else if (filePath.ends_with(".txt")) {
         return loadTvecsInfo(filePath);
     }
-    
+
     throw std::runtime_error("no support file");
 }
-inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadTvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
+inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadTvecs(const std::string& filePath,
+                                                                   std::pair<int, int> bounds = {1, 0}) {
     std::ifstream file(filePath);
     if (!file.is_open()) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
         return {};
     }
 
-    size_t m = 0; 
-    int d = 0;    
+    size_t m = 0;
+    int d = 0;
     std::vector<std::vector<float>> data;
 
     std::string line;
@@ -377,11 +375,11 @@ inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadTvecs(const std::st
         }
 
         if (m == 0) {
-            d = row.size(); 
+            d = row.size();
         }
 
         data.push_back(row);
-        m++; 
+        m++;
     }
 
     size_t a = bounds.first;
@@ -390,12 +388,12 @@ inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadTvecs(const std::st
     assert(a >= 1 && b <= m && b >= a);
 
     size_t n = b - a + 1;
-    if(filePath.ends_with("query.txt")) {
-        if(d == 2712 || d == 2709) {
+    if (filePath.ends_with("query.txt")) {
+        if (d == 2712 || d == 2709) {
             d = 2712;
         }
-        for(int i = 0; i < 3; i++) {
-            for(int j = 0; j < data.size(); j++) {
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < data.size(); j++) {
                 data[j].push_back(0);
             }
         }
@@ -409,20 +407,18 @@ inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadTvecs(const std::st
         // for(int i = 0; i < n; i++) {
         //     printVector(float_vectors.get() + i * d, d, GREEN);
         // }
-        return std::make_tuple(std::move(float_vectors), n , d);
-
+        return std::make_tuple(std::move(float_vectors), n, d);
 
     } else {
-
         int factor = 0;
-        if(d == 2712 || d == 2709) {
+        if (d == 2712 || d == 2709) {
             d = 2712;
             factor = 600;
         } else {
             factor = 100;
         }
-        for(int i = 0; i < 3; i++) {
-            for(int j = 0; j < data.size(); j++) {
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < data.size(); j++) {
                 data[j].push_back(0);
             }
         }
@@ -434,21 +430,22 @@ inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadTvecs(const std::st
                 float_vectors[(i - (a - 1)) * d + j] = data[i][j];
             }
         }
-        for(int i = 1; i < factor; i++) {
-            for(int j = 0; j < n * d; j++) {
+        for (int i = 1; i < factor; i++) {
+            for (int j = 0; j < n * d; j++) {
                 float_vectors[i * n * d + j] = float_vectors[j] + 0.001 * i;
             }
-            if(i == 1) {
+            if (i == 1) {
                 // printVector(float_vectors.get() + n * d, n * d, BLUE);
             }
-                // std::copy_n(float_vectors.get(), n * d, float_vectors.get() + i * n * d);
+            // std::copy_n(float_vectors.get(), n * d, float_vectors.get() + i * n * d);
         }
 
         return std::make_tuple(std::move(float_vectors), n * factor, d);
     }
 }
 
-inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadXvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
+inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadXvecs(const std::string& filePath,
+                                                                   std::pair<int, int> bounds = {1, 0}) {
     if (filePath.ends_with(".fvecs")) {
         return loadFvecs(filePath, bounds);
     } else if (filePath.ends_with(".bvecs")) {
@@ -456,16 +453,15 @@ inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadXvecs(const std::st
     } else if (filePath.ends_with(".txt")) {
         return loadTvecs(filePath);
     }
-    
+
     throw std::runtime_error("no support file");
 }
 
 // A class for measuring execution time
 class Stopwatch {
-   public:
+public:
     // Constructor initializes the start time
-    Stopwatch()
-        : start(std::chrono::high_resolution_clock::now()) {}
+    Stopwatch() : start(std::chrono::high_resolution_clock::now()) {}
 
     // Resets the start time to the current time
     inline void reset() { start = std::chrono::high_resolution_clock::now(); }
@@ -486,9 +482,10 @@ class Stopwatch {
         if (isReset) {
             reset();
         }
-        return ret; }
+        return ret;
+    }
 
-   private:
+private:
     // The start time
     std::chrono::time_point<std::chrono::high_resolution_clock> start;
 };
@@ -498,41 +495,26 @@ public:
     bool shouldPrint;
     std::string name;
     std::string color;
-    MyStopWatch(bool shouldPrint = true, std::string name = "MyStopWatch", std::string color = GREEN) 
-    : shouldPrint(shouldPrint) , name(name) ,color(color) { watch.reset(); }
+    MyStopWatch(bool shouldPrint = true, std::string name = "MyStopWatch", std::string color = GREEN)
+        : shouldPrint(shouldPrint), name(name), color(color) {
+        watch.reset();
+    }
 
     void print(std::string s, bool reset = true) {
-        static bool printSwitch = true;
+        static bool printSwitch = false;
         if (!shouldPrint || !printSwitch) {
             return;
         }
         double time = watch.elapsedSeconds(reset);
         std::string star = "";
-        if(time > 1) {
+        if (time > 1) {
             star = "***";
         }
-        std::cout << color << format("[{}:{:>30}]:{:.4f}s  {}" ,name ,s, time, star) << RESET << std::endl;
+        std::cout << color << format("[{}:{:>30}]:{:.4f}s  {}", name, s, time, star) << RESET << std::endl;
     }
-    void reset() {
-        watch.reset();
-    }
+    void reset() { watch.reset(); }
 };
-// V0
-//  inline float calculatedEuclideanDistance(const float* vec1, const float* vec2, size_t size) {
-//      // 计算 vec1 和 vec2 的 L2 范数的平方
-//      float norm1 = cblas_snrm2(size, vec1, 1);
-//      float norm2 = cblas_snrm2(size, vec2, 1);
-//      float norm1Sq = norm1 * norm1;
-//      float norm2Sq = norm2 * norm2;
 
-//     // 计算 vec1 和 vec2 的点积
-//     float dotProduct = cblas_sdot(size, vec1, 1, vec2, 1);
-
-//     // 使用前面的公式计算欧氏距离的平方
-//     float distanceSq = norm1Sq + norm2Sq - 2 * dotProduct;
-
-//     return distanceSq;
-// }
 
 // V1
 // inline float calculatedEuclideanDistance(const float* vec1, const float* vec2, size_t size) {
@@ -557,7 +539,8 @@ public:
 //     return norm1 + dotProduct22 - 2 * cblas_sdot(size, vec1, 1, vec2, 1);
 // }
 
-// inline float calculatedEuclideanDistance(const float* vec1, const float* vec2, float norm1, float norm2, size_t size) {
+// inline float calculatedEuclideanDistance(const float* vec1, const float* vec2, float norm1, float norm2, size_t size)
+// {
 //     return norm1 + norm2 - 2 * cblas_sdot(size, vec1, 1, vec2, 1);
 // }
 
@@ -571,7 +554,8 @@ public:
 // V4
 
 #ifdef DEBUG
-__attribute__((optimize("O0"))) inline float calculatedEuclideanDistance(const float* vec1, const float* vec2, size_t size) {
+__attribute__((optimize("O0"))) inline float calculatedEuclideanDistance(const float* vec1, const float* vec2,
+                                                                         size_t size) {
     float distance = 0.0;
     for (size_t i = 0; i < size; ++i) {
         float diff = vec1[i] - vec2[i];
@@ -590,7 +574,8 @@ inline float calculatedEuclideanDistance(const float* vec1, const float* vec2, s
 }
 #endif
 
-__attribute__((optimize("O0"))) inline float calculatedEuclideanDistance0(const float* vec1, const float* vec2, size_t size) {
+__attribute__((optimize("O0"))) inline float calculatedEuclideanDistance0(const float* vec1, const float* vec2,
+                                                                          size_t size) {
     float distance = 0.0;
     for (size_t i = 0; i < size; ++i) {
         float diff = vec1[i] - vec2[i];
@@ -785,7 +770,8 @@ inline float calculatedInnerProduct(const float* vec1, const float* vec2, size_t
 }
 #endif
 
-__attribute__((optimize("O0"))) inline float calculatedInnerProduct0(const float* vec1, const float* vec2, size_t size) {
+__attribute__((optimize("O0"))) inline float calculatedInnerProduct0(const float* vec1, const float* vec2,
+                                                                     size_t size) {
     // return cblas_sdot(size, vec1, 1, vec2, 1);
     float sum = 0.0;
     for (size_t i = 0; i < size; ++i) {
@@ -894,8 +880,9 @@ inline float relative_error(float x, float y) {
 
 #define FEPS 1e-4
 
-inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k, MetricType metric, size_t gt_k = 0) {
-    if(D[0] < 0) {
+inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k,
+                              MetricType metric, size_t gt_k = 0) {
+    if (D[0] < 0) {
         std::cout << RED << "negative Distance " << RESET << std::endl;
         return 0;
     }
@@ -921,7 +908,7 @@ inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, c
     }
     // std::cout << correct << " "<< true_correct <<std::endl;
     if (metric == MetricType::METRIC_L2) {
-// #pragma omp parallel for reduction(+ : correct)
+        // #pragma omp parallel for reduction(+ : correct)
         for (size_t i = 0; i < nq; ++i) {
             float topK = std::numeric_limits<float>::max();
             size_t ii = k - 1;
@@ -967,7 +954,8 @@ inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, c
     return static_cast<float>(true_correct) / (nq * k);
 }
 
-inline float calculate_r2(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k, MetricType metric, size_t gt_k = 0) {
+inline float calculate_r2(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k,
+                          MetricType metric, size_t gt_k = 0) {
     if (gt_k == 0) {
         gt_k = k;
     }
@@ -1001,7 +989,7 @@ inline void output_codes(const float* code, size_t d) {
 
 inline std::vector<int> distribute_jobs(int total_jobs, int num_workers, float uneven_factor) {
     std::vector<int> jobs(num_workers, 0);
-    
+
     if (uneven_factor == 0.0f) {
         // Perfectly even distribution
         int even_jobs = total_jobs / num_workers;
@@ -1016,12 +1004,12 @@ inline std::vector<int> distribute_jobs(int total_jobs, int num_workers, float u
         // Intermediate uneven distribution
         // Use control factor to skew the distribution
         int remaining_jobs = total_jobs;
-        
+
         // Generate a random number distribution where jobs are skewed based on control_factor
         // std::random_device rd;
         // std::mt19937 gen(rd());
         // std::uniform_real_distribution<> dis(0.0, 1.0);
-        
+
         // First pass: randomly assign some jobs based on the control factor
         // for (int i = 0; i < num_workers; ++i) {
         //     // Determine the skew factor based on control_factor
@@ -1031,8 +1019,8 @@ inline std::vector<int> distribute_jobs(int total_jobs, int num_workers, float u
         //     remaining_jobs -= job_share;
         // }
         jobs[0] = uneven_factor * total_jobs;
-        remaining_jobs -= jobs[0]; 
-        
+        remaining_jobs -= jobs[0];
+
         // Second pass: distribute remaining jobs evenly
         for (int i = 0; i < num_workers; ++i) {
             jobs[i] += remaining_jobs / num_workers;
@@ -1043,4 +1031,4 @@ inline std::vector<int> distribute_jobs(int total_jobs, int num_workers, float u
     return jobs;
 }
 
-}  // namespace tribase
+}  // namespace harmony
