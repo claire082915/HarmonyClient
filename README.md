@@ -1,6 +1,7 @@
 # HARMONY: A Scalable Distributed Vector Database for High-Throughput Approximate Nearest Neighbor Search
 
 ## Introduction
+Harmony is a distributed ANNS system that employs a novel multi-granularity partition strategy, combining dimension-based and vector-based partition.
 
 ## Dataset
 
