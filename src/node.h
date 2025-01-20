@@ -14,7 +14,7 @@
 #include "IVFScan.hpp"
 #include "order.h"
 
-namespace tribase {
+namespace harmony {
 
 class Index;
 

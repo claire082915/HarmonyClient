@@ -9,7 +9,7 @@
 #include <faiss/IndexIVFFlat.h>
 #include "tribase.h"
 #include "utils.h"
-using namespace tribase;
+using namespace harmony;
 int main(int argc, char* argv[]) {
     argparse::ArgumentParser program("tribase");
     program.add_argument("--base_file").help("base file path").default_value(std::string("../benchmarks/sift10k/origin/sift10k_base.fvecs"));

@@ -16,7 +16,7 @@
 #include "tribase.h"
 #include "utils.h"
 
-using namespace tribase;
+using namespace harmony;
 using namespace std;
 bool str_lower_equal(const std::string& a, const std::string& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),

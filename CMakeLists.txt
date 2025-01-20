@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(TriBase)
+project(Harmony)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,6 +46,5 @@ endif()
 
 include_directories(${CMAKE_SOURCE_DIR}/third_party)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/faiss)
-include_directories(${CMAKE_SOURCE_DIR}/hnswlib)
 add_subdirectory(third_party/faiss)
 add_subdirectory(src)

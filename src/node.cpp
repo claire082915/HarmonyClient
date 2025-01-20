@@ -1,6 +1,6 @@
 #include "node.h"
 #include "Index.h"
-namespace tribase {
+namespace harmony {
 
 // void Worker::addIVFs(vector<std::unique_ptr<float[]>>& listCodesBuffer) {
 //     assert(rank != 0 && info.block_dim != 0);

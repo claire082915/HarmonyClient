@@ -6,7 +6,7 @@
 #include <cmath>
 #include <limits>
 
-namespace tribase {
+namespace harmony {
 
 Clustering::Clustering(size_t d, size_t nlist, bool verbose, const ClusteringParameters& cp)
     : d(d), nlist(nlist), verbose(verbose), cp(cp), centroids(nlist * d, 0.0f) {}

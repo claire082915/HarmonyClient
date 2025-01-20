@@ -7,7 +7,7 @@
 #include <vector>
 #include "utils.h"
 
-namespace tribase {
+namespace harmony {
 
 using namespace std;
 class SearchOrder {

@@ -16,7 +16,7 @@
 #include <string>
 #include <utility>
 
-namespace tribase {
+namespace harmony {
 enum MetricType { METRIC_IP = 0,
                   METRIC_L2 };
 

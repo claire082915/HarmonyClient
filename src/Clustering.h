@@ -8,7 +8,7 @@
 #include "common.h"
 #include "utils.h"
 
-namespace tribase {
+namespace harmony {
 
 struct ClusteringParameters {
     int niter = 25;

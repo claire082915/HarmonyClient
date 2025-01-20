@@ -8,19 +8,19 @@ set(SRC_FILES
     # utils.cpp
 )
 
-add_library(Tribase STATIC ${SRC_FILES})
+add_library(Harmony STATIC ${SRC_FILES})
 
-target_link_libraries(Tribase PUBLIC OpenMP::OpenMP_CXX
+target_link_libraries(Harmony PUBLIC OpenMP::OpenMP_CXX
                                     mkl_intel_lp64
                                     mkl_sequential
                                     mkl_core
                                     MPI::MPI_CXX)
 
 add_executable(main main.cpp)
-target_link_libraries(main Tribase faiss)
+target_link_libraries(main Harmony faiss)
 
 add_executable(query query.cpp)
-target_link_libraries(query Tribase faiss)
+target_link_libraries(query Harmony faiss)
 
 # add_executable(divide divide.cpp)
 # target_link_libraries(divide Tribase faiss)

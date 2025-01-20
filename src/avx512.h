@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstddef>
 
-namespace tribase {
+namespace harmony {
 
 // 简化的512位向量类，只处理浮点数
 class simd512f {

@@ -10,7 +10,7 @@
 #include "common.h"
 #include "utils.h"
 
-namespace tribase {
+namespace harmony {
 class Stats {
    public:
     size_t total_count;

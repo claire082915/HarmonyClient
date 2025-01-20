@@ -24,7 +24,7 @@
 #include <random>
 #include <cmath>
 
-namespace tribase {
+namespace harmony {
     const std::string BLUE = "\033[1;34m"; // Blue text
     const std::string YELLOW = "\033[1;33m"; // Blue text
     const std::string GREEN = "\033[1;32m"; // Blue text

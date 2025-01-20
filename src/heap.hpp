@@ -8,7 +8,7 @@
 
 #include "common.h"
 
-namespace tribase {
+namespace harmony {
 
 template <MetricType metric = MetricType::METRIC_L2>
 inline void heap_init(size_t k, float* bh_val, idx_t* bh_ids) {

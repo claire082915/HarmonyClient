@@ -10,7 +10,7 @@
 #include "hnswlib/hnswlib.h"
 #endif
 
-namespace tribase {
+namespace harmony {
 
 class IVFScanBase {
    public:

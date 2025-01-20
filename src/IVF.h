@@ -5,7 +5,7 @@
 #include <memory>
 #include "common.h"
 
-namespace tribase {
+namespace harmony {
 class IVF {
    public:
     

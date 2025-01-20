@@ -1,7 +1,7 @@
 #include "IVF.h"
 #include <iostream>
 
-namespace tribase {
+namespace harmony {
 IVF::IVF(size_t listSize, size_t d, size_t subK, OptLevel optLevel) {
     reset(listSize, d, subK, optLevel);
 }
