@@ -14,7 +14,7 @@ struct ClusteringParameters {
     int niter = 25;
     int seed = 1234;
     int max_points_per_centroid = 256;
-    MetricType metric = MetricType::METRIC_L2;  // 默认使用 L2 距离
+    MetricType metric = MetricType::METRIC_L2;  
 };
 
 class Clustering {
