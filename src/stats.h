@@ -31,20 +31,21 @@ class Stats {
     size_t dis_calculate_count;
 
     size_t nlist;
-    size_t nq, nb, d;
+    size_t nq, nb, d, k;
     size_t nprobe;
     std::string mode;
 
-    bool divideIVF, disableOrderOptimize, cut, blockSend;
+    bool divideIVF, disableOrderOptimize, pruning, blockSend;
     size_t block, worker, group, team;
     double blockVersionSpeedUpWithOriginal;
 
     double faiss_query_time;
     double query_time, original_time;
-    double trainTime, addTime, preSearchTime, inBalanceRatio;
+    double trainTime, addTime, preSearchTime, inBalanceRatio, inBalanceRatioTeam;
+    double brute_ratio;
     OptLevel opt_level;
 
-    double recall;
+    double recall, recall_loose;
     double r2;
     double variance;
     float simi_ratio;
@@ -120,16 +121,16 @@ class Stats {
     }
     void myToCsv(std::string filename, bool append, std::string dataset = "Unknown") {
         CsvWriter writer(filename,
-                         {"dataset", "mode", "nb", "nq", "d", "nlist", "nprobe", "divideIVF", "orderOptimize", "UnblockSend", "cut", "block", "worker",
+                         {"dataset", "mode", "nb", "nq", "d", "nlist", "nprobe", "k", "divideIVF", "orderOptimize", "UnblockSend", "cut", "block", "worker",
                           "group", "team", 
                           "time_speedup", "query_time", "original_time",
-                          "1-recall", "r2", "variance", "train_time", "add_time", "preSearch_time", "ratio"},
+                          "recall", "r2", "variance", "train_time", "add_time", "preSearch_time", "ratio", "teamRatio", "brute_ratio"},
                          append, false);
         summary();
-        writer << dataset << mode << nb << nq << d << nlist << nprobe <<  divideIVF << !disableOrderOptimize << !blockSend << cut << block << worker 
+        writer << dataset << mode << nb << nq << d << nlist << nprobe << k <<  divideIVF << !disableOrderOptimize << !blockSend << pruning << block << worker 
                << group << team
                << time_speedup << query_time << original_time
-               << 1.0 - recall << r2 << variance << trainTime << addTime << preSearchTime << inBalanceRatio << std::endl;
+               << recall << r2 << variance << trainTime << addTime << preSearchTime << inBalanceRatio << inBalanceRatioTeam << brute_ratio << std::endl;
     }
 };
 

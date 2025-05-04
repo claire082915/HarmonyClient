@@ -19,17 +19,16 @@
 using namespace harmony;
 
 using namespace std;
-
 bool str_lower_equal(const std::string& a, const std::string& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
                       [](char a, char b) { return std::tolower(a) == std::tolower(b); });
 }
 
-int workerMain(int rank, bool cut, Index::SearchMode mode, bool blockSend) {
+int workerMain(int rank, bool cut, Index::SearchMode mode, bool blockSend, bool minorCut) {
     if (mode == Index::SearchMode::DIVIDE_IVF) {
         BaseWorker worker;
         worker.init(rank);
-        worker.search();
+        worker.search(cut);
     } else if (mode == Index::SearchMode::DIVIDE_DIM) {
         Worker node;
         node.init(rank, blockSend);
@@ -40,12 +39,11 @@ int workerMain(int rank, bool cut, Index::SearchMode mode, bool blockSend) {
         GroupWorker worker;
         worker.init(rank, blockSend);
         worker.receiveQuery();
-        worker.search(cut);
+        worker.search(cut, minorCut);
         // node.postSearch();
     }
     return 0;
 }
-
 int main(int argc, char* argv[]) {
     argparse::ArgumentParser program("harmony");
     program.add_argument("--benchmarks_path")
@@ -101,14 +99,24 @@ int main(int argc, char* argv[]) {
         .action([](const std::string& value) -> size_t { return std::stoul(value); });
     program.add_argument("--warmup_list")
         .help("how many lists are used to warmup heap")
-        .default_value(0ul)
+        .default_value(10ul)
         .action([](const std::string& value) -> size_t { return std::stoul(value); });
     program.add_argument("--disablePruning").help("set pruning disabled").default_value(false).implicit_value(true);
+    program.add_argument("--minorCut").help("set minor pruning enabled").default_value(false).implicit_value(true);
     program.add_argument("--disableOrderOpt")
         .help("disable block search order optimization")
         .default_value(false)
         .implicit_value(true);
-    program.add_argument("--inBalance").default_value(false).implicit_value(true);
+    // program.add_argument("--divideIVF")
+    //     .help("disable search order optimization")
+    //     .default_value(false)
+    //     .implicit_value(true);
+    // program.add_argument("--period")
+    //     .default_value(false)
+    //     .implicit_value(true);
+    // program.add_argument("--inBalance")
+    //     .default_value(false)
+    //     .implicit_value(true);
     program.add_argument("--blockSend")
         .help("use blocking MPI_Send instead of unblocking MPI_Isend with search phase")
         .default_value(false)
@@ -129,18 +137,26 @@ int main(int argc, char* argv[]) {
         .action([](const std::string& value) -> size_t { return std::stoul(value); });
     program.add_argument("--mode")
         .help("The mode of search")
-        .default_value(std::string("hybrid"))
-        .choices("vector", "dim", "hybrid");  // Only these choices are valid
+        .default_value(std::string("group"))
+        .choices("base", "group", "block", "original", "brute");  // Only these choices are valid
     program.add_argument("--HardInBalance").help("enable hard inBalance").default_value(false).implicit_value(true);
     program.add_argument("--HardInBalanceRatio")
         .help("control how inbalanced the search would be, 0.0 is perfectly balanced")
-        .default_value(1.0f)
+        .default_value(0.0f)
+        .scan<'f', float>();
+
+    program.add_argument("--HardInBalanceTeamRatio")
+        .help("control how inbalanced the search would be, 0.0 is perfectly balanced")
+        .default_value(0.0f)
         .scan<'f', float>();
     program.add_argument("--HardInBalanceTeam")
         .help("number of Hard InBalance Team")
         .default_value(0ul)
         .action([](const std::string& value) -> size_t { return std::stoul(value); });
-
+    program.add_argument("--brute_force_search_ratio")
+        .help("")
+        .default_value(1.0f)
+        .scan<'f', float>();
     try {
         program.parse_args(argc, argv);
     } catch (const std::runtime_error& err) {
@@ -159,12 +175,15 @@ int main(int argc, char* argv[]) {
     workerCount--;
 
     bool disableOrderOptimize = program.get<bool>("disableOrderOpt");
-    bool cut = !program.get<bool>("--disablePruning");
+    bool pruning = !program.get<bool>("disablePruning");
+    bool minorCut = program.get<bool>("minorCut");
     bool run_faiss = program.get<bool>("run_faiss");
-    bool inBalance = program.get<bool>("inBalance");
     bool hardInBalance = program.get<bool>("HardInBalance");
     size_t hardInBalanceTeam = program.get<size_t>("HardInBalanceTeam");
     float inBalanceRatio = program.get<float>("HardInBalanceRatio");
+    float inBalanceTeamRatio = program.get<float>("HardInBalanceTeamRatio");
+    float brute_force_search_ratio= program.get<float>("brute_force_search_ratio");
+    
     if ((hardInBalance && hardInBalanceTeam == 0) || (hardInBalanceTeam != 0 && !hardInBalance) ||
         inBalanceRatio > 1.0) {
         cerr << "hardInBalance and hardInBalanceTeam" << endl;
@@ -173,76 +192,48 @@ int main(int argc, char* argv[]) {
     bool blockSend = program.get<bool>("blockSend");
     bool fullWarmUp = program.get<bool>("fullWarmUp");
 
-    char* job_id = std::getenv("SLURM_JOB_ID");
-    char* node_list = std::getenv("SLURM_JOB_NODELIST");
-    char* num_nodes = std::getenv("SLURM_NNODES");
 
     size_t groupCount = program.get<size_t>("group");
     size_t teamCount = program.get<size_t>("team");
     size_t teamSize = workerCount / teamCount;
     size_t blockCount = program.get<size_t>("block");
 
+
     std::string mode = program.get<std::string>("--mode");
     Index::SearchMode searchMode = Index::SearchMode::DIVIDE_GROUP;
-    if (mode == "dim") {
-        cout << YELLOW << "Mode: Dim" << RESET << endl;
+    if (mode == "original") {
+        searchMode = Index::SearchMode::ORIGINAL;
+        if (workerCount > 0) {
+            cerr << "worker should be 0" << endl;
+            return 1;
+        }
+    } else if (mode == "block") {
         searchMode = Index::SearchMode::DIVIDE_DIM;
-    } else if (mode == "vector") {
-        cout << YELLOW << "Mode: Vector" << RESET << endl;
-        groupCount = workerCount;
+    } else if (mode == "base") {
+        // groupCount = workerCount;
         searchMode = Index::SearchMode::DIVIDE_IVF;
+    } else if (mode == "brute") {
+        searchMode = Index::SearchMode::BRUTE_FORCE;
     } else {
-        cout << YELLOW << "Mode: Hybrid" << RESET << endl;
         searchMode = Index::SearchMode::DIVIDE_GROUP;
+        if (workerCount % teamCount != 0) {
+            cerr << "worker should divide team count" << endl;
+            return 1;
+        }
+        if (groupCount < teamCount) {
+            cerr << "groupCount < teamCount" << endl;
+            return 1;
+        }
     }
-
-    if (workerCount % teamCount != 0) {
-        cerr << "worker should divide team count" << endl;
-        return 1;
-    }
-    if (groupCount < teamCount) {
-        cerr << "groupCount < teamCount" << endl;
-        return 1;
-    }
-    // if(workerCount > 0) {
-    //     if(groupCount > 0) {
-    //         searchMode = Index::SearchMode::DIVIDE_GROUP;
-    //         if(teamCount <= 0 || blockCount <= 0 || workerCount <= 0) {
-    //             cerr << "provide --team and --block and workers" << endl;
-    //             exit(1);
-    //         }
-    //     } else if(divideIVF) {
-    //         searchMode = Index::SearchMode::DIVIDE_IVF;
-    //     } else if(blockCount > 0) {
-    //         searchMode = Index::SearchMode::DIVIDE_DIM;
-    //     }
-    // } else {
-    //     searchMode = Index::SearchMode::ORIGINAL;
-    // }
-
-    // bool groupVersion = groupCount > 0;
-    // bool block_version = (blockCount > 0);
-    // if (blockCount > 0 && (blockCount != 0 && workerCount == 0 || blockCount == 0 && workerCount != 0)) {
-    //     throw std::invalid_argument("block count and node cound must be provided at the same time");
-    // }
 
     if (rank != 0) {
         if (!run_faiss) {
             MPI_Barrier(MPI_COMM_WORLD);
-            workerMain(rank, cut, searchMode, blockSend);
+            workerMain(rank, pruning, searchMode, blockSend, minorCut);
         }
     } else {
-        // MyStopWatch watch(true, "queryWatch", CRAN);
-        // if (job_id && node_list && num_nodes) {
-        //     std::cout << "Job ID: " << job_id << std::endl;
-        //     std::cout << "Nodes List: " << node_list << std::endl;
-        //     std::cout << "Number of Nodes: " << num_nodes << std::endl;
-        // }
 
-        // std::cout << "Arguments passed to the program:" << std::endl;
-        // for (int i = 0; i < argc; i++) {
-        //     std::cout << argv[i] << " ";
-        // }
+        cout << YELLOW << format("Mode: {}", Index::to_string(searchMode)) << RESET << endl;
         // cout << CRAN << "master main, node count: " << workerCount << RESET << endl;
 
         std::vector<size_t> nprobes = program.get<std::vector<size_t>>("nprobes");
@@ -268,8 +259,7 @@ int main(int argc, char* argv[]) {
         bool verbose = program.get<bool>("verbose");
         bool early_stop = program.get<bool>("early_stop");
 
-        std::cout << BLUE << "number of nodes : " << workerCount << RESET << std::endl;
-
+        // std::cout << BLUE << "number of nodes : " << workerCount << RESET << std::endl;
         if (early_stop && (ratios[0] != 1 || ratios.size() != 1)) {
             throw std::invalid_argument("early_stop is only allowed when ratios is 1.0");
         }
@@ -287,7 +277,7 @@ int main(int argc, char* argv[]) {
         float sub_nprobe_ratio = program.get<float>("sub_nprobe_ratio");
 
         // std::string inBalanceString = inBalance ? "InBalance" : "";
-        std::string inBalanceString = inBalance ? "InBalance" : (hardInBalance ? "Hard" : "");
+        std::string inBalanceString = hardInBalance ? "Hard" : "";
         std::string base_path = std::format("{}/{}/origin/{}_base.{}", benchmarks_path, dataset, dataset, input_format);
         std::string query_path =
             std::format("{}/{}/origin/{}_query.{}", benchmarks_path, dataset, dataset, input_format);
@@ -318,6 +308,7 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<float[]> base = nullptr;
         std::tie(nb, d) = loadXvecsInfo(base_path);
 
+        // only output dataset-info to csv file
         if (program.get<bool>("dataset_info")) {
             auto [nq, _] = loadXvecsInfo(query_path);
             std::ofstream ofs;
@@ -331,8 +322,6 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        // init nlist, nprobe
-        // sift10k, nb = 10000, nlist = 100
         if (nlist == 0) {
             nlist = static_cast<size_t>(std::sqrt(nb));
         }
@@ -375,11 +364,6 @@ int main(int argc, char* argv[]) {
         if (verbose) {
             std::cout << std::format("Added optimization levels: {}", static_cast<int>(added_opt_levels)) << std::endl;
         }
-        // nprobes.clear();
-        // for (size_t val = 1; val <= nlist / 2; val *= 2) {
-        //     nprobes.push_back(val);
-        // }
-        // nprobes.push_back(nlist);
 
         auto get_index_path = [&]() {
             int target = static_cast<int>(added_opt_levels);
@@ -425,23 +409,9 @@ int main(int argc, char* argv[]) {
             //     return 1;
             // }
         }
-        srand(time(0));
-        if (inBalance && !hardInBalance) {
-            cout << YELLOW << "InBalance Query Set" << RESET << endl;
-            for (int q = 1; q < nq; q++) {
-                copy_n(query.get(), d, query.get() + q * d);
-                float random_value = rand() / (float)RAND_MAX * 0.00001;
-                for (int i = q * d; i < q * d + d; i++) {
-                    query[i] += random_value;
-                }
-            }
-            // for(int q = 0; q < nq; q++) {
-            //     printVector(query.get() + q * d, d, BLUE);
-            // }
-        }
 
         if (workerCount > 0 && (run_faiss)) {
-            cerr << RED << "Error: worker > 0" << RESET << endl;
+            cerr << RED << "Error: worker should be 0 under faiss" << RESET << endl;
             return 1;
         }
 
@@ -626,23 +596,53 @@ int main(int argc, char* argv[]) {
                             float* distances, idx_t* labels, Index::Param* param) -> Stats {
             auto path = std::format("{}/{}/index/index_nlist_{}_{}.index", benchmarks_path, dataset, nlist,
                                     index.to_string(param->mode));
-            index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param, path);
             // if(!std::filesystem::exists(path)) {
             //     index.save_index(path, param->mode);
             // }
-            if (loop > 1) {
-                index.search(nq, query.get(), k, distances, labels, ratio);
-            }
             Stopwatch stopwatch;
             Stats stats;
-            for (size_t j = 0; j < loop; j++) {
-                stats = index.search(nq, query.get(), k, distances, labels, ratio);
+            double search_time;
+            if (param->mode == Index::SearchMode::BRUTE_FORCE) {
+                cout << "start brute force" << endl;
+                std::tie(base, nb, d) = loadXvecs(base_path);
+
+                stopwatch.reset();
+                init_result(metric, nq * k, distances, labels);
+#pragma omp parallel for
+                for (int q = 0; q < nq; ++q) {
+                    float* simi = distances + q * k;  
+                    idx_t* idxi = labels + q * k;     
+                    //For each query, calculate distance to all base vectors
+                    float* candidate = base.get();
+                    for (int i = 0; i < nb * brute_force_search_ratio; ++i) {
+                        float* queries = query.get() + q * d;
+                        float dis = calculatedEuclideanDistance(queries, candidate, d);
+                        if (dis < simi[0]) {
+                            heap_replace_top<METRIC_L2>(k, simi, idxi, dis, i);
+                        }
+                        candidate += d;
+                    }
+                    sort_result(metric, k, simi, idxi);
+                }
+                search_time = stopwatch.elapsedSeconds();
+
+            } else {
+                index.preSearch(nb, workerCount, blockCount, warmUpSearchList, warmUpSearchListSize, param, path);
+                if (loop > 1) {
+                    index.search(nq, query.get(), k, distances, labels, ratio);
+                }
+                stopwatch.reset();
+                for (size_t j = 0; j < loop; j++) {
+                    stats = index.search(nq, query.get(), k, distances, labels, ratio);
+                }
+                search_time = stopwatch.elapsedSeconds() / loop;
+                index.postSearch();
             }
 
-            double search_time = stopwatch.elapsedSeconds() / loop;
-            index.postSearch();
             float recall =
                 calculate_recall(labels, distances, ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
+            // float recall_loose =
+            //     calculate_recall_loose(labels, distances, ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
             float r2 = calculate_r2(labels, distances, ground_truth_I.get(), ground_truth_D.get(), nq, k, metric);
             stats.simi_ratio = ratio;
             stats.nlist = nlist;
@@ -651,13 +651,14 @@ int main(int argc, char* argv[]) {
             stats.faiss_query_time = f_time;
             stats.opt_level = opt_level;
             stats.recall = recall;
+            // stats.recall_loose = recall_loose;
             stats.r2 = r2;
             stats.block = blockCount;
             stats.worker = workerCount;
             stats.disableOrderOptimize = disableOrderOptimize;
             // stats.divideIVF = divideIVF;
-            stats.cut = cut;
-            stats.nodeList = node_list;
+            stats.pruning = pruning;
+            // stats.nodeList = node_list;
             stats.nb = nb;
             stats.nq = nq;
             stats.d = d;
@@ -666,6 +667,9 @@ int main(int argc, char* argv[]) {
             stats.team = teamCount;
             stats.blockSend = blockSend;
             stats.inBalanceRatio = param->hardInBalanceRatio;
+            stats.inBalanceRatioTeam = param->hardInBalanceTeamRatio;
+            stats.k = k;
+            stats.brute_ratio = brute_force_search_ratio;
 
             if (recall == 1) {
                 early_stop_flag = true;
@@ -686,25 +690,21 @@ int main(int argc, char* argv[]) {
                     std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
                     std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
 
-                    Index::Param oriParam;
-                    oriParam.mode = Index::SearchMode::ORIGINAL;
+                    // Index::Param oriParam;
+                    // oriParam.mode = Index::SearchMode::ORIGINAL;
                     // Stats oriStat = doSearch(nprobe, opt_level, ratio, early_stop_flag, f_time, distances.get(),
                     // labels.get(), &oriParam);
 
-                    std::cout << YELLOW;
-                    // oriStat.print();
-                    std::cout << RESET;
-
-                    // if(searchMode != Index::SearchMode::ORIGINAL) {
-                    MPI_Barrier(MPI_COMM_WORLD);
-                    // }
                     // std::cout << YELLOW;
+                    // oriStat.print();
+                    // std::cout << RESET;
+
+                    MPI_Barrier(MPI_COMM_WORLD);
 
                     Index::Param param;
                     param.orderOptimize = !disableOrderOptimize;
                     param.mode = searchMode;
-                    // param.period = period;
-                    param.cut = cut;
+                    param.pruning = pruning;
                     param.fullWarmUp = fullWarmUp;
                     param.groupCount = groupCount;
                     param.teamCount = teamCount;
@@ -712,6 +712,7 @@ int main(int argc, char* argv[]) {
                     param.hardInBalance = hardInBalance;
                     param.hardInBalanceTeam = hardInBalanceTeam;
                     param.hardInBalanceRatio = inBalanceRatio;
+                    param.hardInBalanceTeamRatio = inBalanceTeamRatio;
                     auto heapTops = std::make_unique<float[]>(nq);
                     if (param.fullWarmUp) {
                         cout << YELLOW << "Full Warm Up!" << RESET << endl;
@@ -729,27 +730,29 @@ int main(int argc, char* argv[]) {
                     // stat.blockVersionSpeedUpWithOriginal = 100.0 * oriStat.query_time / stat.query_time;
                     // cout << MAG << format("Speed up ratio compared to original version : {:.2f}",
                     // stat.blockVersionSpeedUpWithOriginal) << RESET << endl;
-                    auto ivfCalculatedCount = vector<int>(nlist, 0);
-                    for (int i = 0; i < nprobe * nq; i++) {
-                        ivfCalculatedCount[index.listidqueries[i]]++;
+
+                    if(param.mode != Index::SearchMode::BRUTE_FORCE && param.mode != Index::SearchMode::ORIGINAL) {
+                        auto ivfCalculatedCount = vector<int>(nlist, 0);
+                        for (int i = 0; i < nprobe * nq; i++) {
+                            ivfCalculatedCount[index.listidqueries[i]]++;
+                        }
+                        double average = (double)nprobe * nq / nlist;
+                        double variance = 0;
+                        for (int i = 0; i < nlist; i++) {
+                            variance += (ivfCalculatedCount[i] - average) * (ivfCalculatedCount[i] - average);
+                        }
+                        variance /= nlist;
+                        variance = sqrt(variance);
+                        stat.variance = variance;
+                        // printVector(ivfCalculatedCount, BLUE, format("variance {} average{}",variance, average));
+
+                        // cout << MAG << format("Speed up ratio compared to faiss : {:.2f}",
+                        // stat.blockVersionSpeedUpWithOriginal) << RESET << endl; stat.original_time = oriStat.query_time;
+                        stat.original_time = stat.faiss_query_time;
+                        stat.trainTime = index.trainTime;
+                        stat.addTime = index.addTime;
+                        stat.preSearchTime = index.preSearchTime;
                     }
-                    double average = (double)nprobe * nq / nlist;
-                    double variance = 0;
-                    for (int i = 0; i < nlist; i++) {
-                        variance += (ivfCalculatedCount[i] - average) * (ivfCalculatedCount[i] - average);
-                    }
-                    variance /= nlist;
-                    variance = sqrt(variance);
-                    stat.variance = variance;
-                    // printVector(ivfCalculatedCount, BLUE, format("方差 {} 平均{}",variance, average));
-                    cout << MAG
-                         << format("Speed up ratio compared to faiss : {:.2f}", stat.blockVersionSpeedUpWithOriginal)
-                         << RESET << endl;
-                    // stat.original_time = oriStat.query_time;
-                    stat.original_time = stat.faiss_query_time;
-                    stat.trainTime = index.trainTime;
-                    stat.addTime = index.addTime;
-                    stat.preSearchTime = index.preSearchTime;
                     stat.print();
                     // stat.myToCsv(log_path, true, dataset);
                     stat.myToCsv(log_path, true, dataset + inBalanceString);

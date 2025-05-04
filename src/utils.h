@@ -2,9 +2,8 @@
 
 #include <mkl.h>
 // #include <mkl_cblas.h>
-#include <immintrin.h>  // 包含AVX2和其他SIMD指令集的头文件
-
-#include <algorithm>  // 包含std::fill_n
+#include <immintrin.h>  
+#include <algorithm>    
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -19,21 +18,21 @@
 #include <utility>
 #include <vector>
 // #include "avx512.h"
-#include <cmath>
-#include <random>
-
 #include "common.h"
 #include "faiss/faiss/utils/distances.h"
 #include "platform_macros.h"
+#include <random>
+#include <cmath>
 
 namespace harmony {
-const std::string BLUE = "\033[1;34m";    // Blue text
-const std::string YELLOW = "\033[1;33m";  // Blue text
-const std::string GREEN = "\033[1;32m";   // Blue text
-const std::string CRAN = "\033[1;36m";    // Blue text
-const std::string MAG = "\033[1;35m";     // Blue text
-const std::string RED = "\033[1;31m";     // Blue text
-const std::string RESET = "\033[0m";      // Reset color
+    const std::string BLUE = "\033[1;34m"; // Blue text
+    const std::string YELLOW = "\033[1;33m"; // Blue text
+    const std::string GREEN = "\033[1;32m"; // Blue text
+    const std::string CRAN = "\033[1;36m"; // Blue text
+    const std::string MAG = "\033[1;35m"; // Blue text
+    const std::string RED = "\033[1;31m"; // Blue text
+    const std::string RESET = "\033[0m"; // Reset color
+
 
 // void copyPartialVector(const float* const src, float* dest, size_t id_start, size_t ) {
 
@@ -629,10 +628,38 @@ inline float relative_error(float x, float y) {
 }
 
 #define FEPS 1e-4
+inline float calculate_recall_loose(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k, MetricType metric, size_t gt_k = 0) {
+    if(D[0] < 0) {
+        std::cout << RED << "negative Distance " << RESET << std::endl;
+        return 0;
+    }
+    if (gt_k == 0) {
+        gt_k = k;
+    }
+    size_t true_correct = 0;
+    size_t correct = 0;
+    if (k > gt_k) {
+        throw std::invalid_argument("k should be less than or equal to gt_k.");
+    }
+#pragma omp parallel for reduction(+ : true_correct, correct)
+    for (size_t i = 0; i < nq; ++i) {
+        float maxDis = GD[i * k + k - 1];
+        std::unordered_set<idx_t> groundtruth(GT + i * gt_k, GT + i * gt_k + k);
+        for (size_t j = 0; j < k; ++j) {
+            if (I[i * k + j] == -1) {
+                break;
+            }
+            if (groundtruth.find(I[i * k + j]) != groundtruth.end() || D[i * k + j] < maxDis || abs(D[i * k + j] - maxDis) <= FEPS) {
+                true_correct++;
+            }
+        }
+    }
+    return static_cast<float>(true_correct) / (nq * k);
+}
 
-inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k,
-                              MetricType metric, size_t gt_k = 0) {
-    if (D[0] < 0) {
+#define FEPS 1e-4
+inline float calculate_recall(const idx_t* I, const float* D, const idx_t* GT, const float* GD, size_t nq, size_t k, MetricType metric, size_t gt_k = 0) {
+    if(D[0] < 0) {
         std::cout << RED << "negative Distance " << RESET << std::endl;
         return 0;
     }

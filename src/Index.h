@@ -2,7 +2,6 @@
 #define INDEX_H
 
 #include <memory>
-
 #include "Clustering.h"
 #include "IVF.h"
 #include "IVFScan.hpp"
@@ -12,14 +11,23 @@
 namespace harmony {
 
 class Index {
-public:
-    Index(size_t d = 0, size_t nlist = 0, size_t nprobe = 0, MetricType metric = MetricType::METRIC_L2,
-          OptLevel opt_level = OptLevel::OPT_NONE, size_t sub_k = 0, size_t sub_nlist = 1, size_t sub_nprobe = 1,
-          bool verbose = false, EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
+   public:
+    Index(size_t d = 0,
+          size_t nlist = 0,
+          size_t nprobe = 0,
+          MetricType metric = MetricType::METRIC_L2,
+          OptLevel opt_level = OptLevel::OPT_NONE,
+          size_t sub_k = 0,
+          size_t sub_nlist = 1,
+          size_t sub_nprobe = 1,
+          bool verbose = false,
+          EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED
+          );
 
     Index& operator=(Index&& other) noexcept;
-
+    
     enum class SearchMode {
+        BRUTE_FORCE,
         ORIGINAL,
         DIVIDE_IVF,
         DIVIDE_DIM,
@@ -28,16 +36,12 @@ public:
 
     static std::string to_string(SearchMode mode) {
         switch (mode) {
-            case SearchMode::ORIGINAL:
-                return "Original";
-            case SearchMode::DIVIDE_IVF:
-                return "Baseline";
-            case SearchMode::DIVIDE_DIM:
-                return "Dim     ";
-            case SearchMode::DIVIDE_GROUP:
-                return "Group   ";
-            default:
-                return "Unknown";
+            case SearchMode::BRUTE_FORCE: return "Brute Force";
+            case SearchMode::ORIGINAL: return "Original";
+            case SearchMode::DIVIDE_IVF: return "Baseline";
+            case SearchMode::DIVIDE_DIM: return "Dim     ";
+            case SearchMode::DIVIDE_GROUP: return "Group   ";
+            default: return "Unknown";
         }
     }
 
@@ -51,7 +55,7 @@ public:
         idx_t* queryCompareSizePreSum;
         idx_t queryStart;
         idx_t* listidqueries;
-        bool cut = false;
+        bool pruning = false;
         bool period = false;
         bool fullWarmUp = false;
         float* heapTops = nullptr;
@@ -60,17 +64,16 @@ public:
         bool hardInBalance = false;
         size_t hardInBalanceTeam;
         float hardInBalanceRatio;
+        float hardInBalanceTeamRatio;
     };
     void train(size_t n, const float* codes, bool faiss = false, bool lite = false);
 
     void single_thread_nearest_cluster_search(size_t n, const float* queries, float* distances, idx_t* labels);
-    void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
-                              Stats* stats);
+    void single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
     int single_thread_search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio,
-                             Stats* stats, size_t startIVF, size_t ivfCount);
-    void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels,
-                                     float ratio, Stats* stats);
-    // Method for performing search on a block in a single thread
+                                 Stats* stats, size_t startIVF, size_t ivfCount);
+    void single_thread_search_simple(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio, Stats* stats);
+    // void single_thread_search_worker(size_t n, const float* queries, float* distances, float ratio, Stats* stats, Param* param, float* originalQuery, float* heapTop, idx_t* listidqueries);
     void single_thread_search_block(size_t n, const float* queries, size_t k, float* distances, idx_t* label);
     void search_group_master(size_t n, const float* queries, size_t k, float* distances, idx_t* label);
     void search_divide_ivf(size_t n, const float* queries, size_t k, float* distances, idx_t* labels);
@@ -81,22 +84,18 @@ public:
     void save_index(std::string path, SearchMode mode) const;
     void load_index(std::string path);
     void load_SPANN(std::string path);
-    // Initialize worker nodes for distributed search
     // void initWorkers(size_t workerCount, float* querys, size_t querySize, size_t blockCount, size_t nb);
     void printIndex();
-
-    void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList,
-                   size_t warmUpSearchListSize, Param* param, std::string path);
+   
+    void preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t warmUpSearchList, size_t warmUpSearchListSize, Param* param, std::string path);
     void postSearch();
     // Declare other search-related methods
-    std::unique_ptr<IVFScanBase> get_scanner(MetricType metric, OptLevel opt_level, size_t k,
-                                             EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
+    std::unique_ptr<IVFScanBase> get_scanner(MetricType metric, OptLevel opt_level, size_t k, EdgeDevice edge_device_enabled = EdgeDevice::EDGEDEVIVE_DISABLED);
 
-private:
+   private:
     void warmUpSearch(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, idx_t* listidqueries);
     void findNearNprobeOfCentroidIds(size_t n, const float* queries);
-
-public:
+   public:
     size_t d;
     size_t nlist;
     size_t nprobe;
@@ -127,7 +126,7 @@ public:
     size_t warmUpSearchList = 0;      // Number of clusters to search in warm-up phase
     size_t warmUpSearchListSize = 0;  // Number of vectors to take from each cluster during warm-up
 
-    // idx_t presumeNq = 370,
+    // idx_t presumeNq = 370, 
     idx_t presumeK = 100;
     std::vector<std::unique_ptr<float[]>> distancesHeapBuffer;
     std::vector<std::unique_ptr<idx_t[]>> labelsHeapBuffer;
