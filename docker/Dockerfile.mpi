@@ -1,0 +1,36 @@
+FROM harmony-base
+
+# Install SSH server for MPI communication between containers
+RUN apt-get update && apt-get install -y \
+    openssh-server \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up SSH for passwordless communication
+RUN mkdir -p /var/run/sshd /root/.ssh && \
+    ssh-keygen -A && \
+    chmod 700 /root/.ssh
+
+# Generate SSH keys that will be shared across containers
+RUN ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa && \
+    cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys && \
+    chmod 600 /root/.ssh/authorized_keys /root/.ssh/id_rsa
+
+# Configure SSH for MPI (disable strict host checking for container-to-container)
+RUN echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config && \
+    echo "UserKnownHostsFile=/dev/null" >> /etc/ssh/ssh_config && \
+    echo "LogLevel ERROR" >> /etc/ssh/ssh_config
+
+# Configure SSHD to allow root login
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+
+# Set up MPI hostfile directory
+RUN mkdir -p /app/mpi
+
+WORKDIR /app
+
+# Expose SSH port
+EXPOSE 22
+
+# Default command: start SSH daemon
+CMD ["/usr/sbin/sshd", "-D"]

@@ -734,6 +734,7 @@ void GroupWorker::init(int rank, bool blockSend) {
         init_result(METRIC_L2, presumeNq * presumeK, distanceHeap[i].get(), idHeap[i].get());
     }
     
+    // blockDistancesSize = presumeNq / info.blockCount / info.groupCount * (info.nb / info.nlist) * info.nprobe * 2;
     blockDistancesSize = 2 * presumeNq / info.blockCount / info.groupCount * info.nb * info.nprobe / info.nlist;
     // blockDistancesSize = 2 * presumeNq / info.blockCount / info.groupCount * info.nb / info.teamSize * info.nprobe / info.nlist;
     distancesForBlocks = vector<vector<std::unique_ptr<float[]>>>(info.groupCount);

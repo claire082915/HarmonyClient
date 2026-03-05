@@ -1,0 +1,178 @@
+services:
+  base:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.base
+    image: harmony-base
+
+  # MPI head node - coordinates the distributed execution
+  mpi-head:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mpi
+    image: harmony-mpi
+    hostname: mpi-head
+    container_name: harmony-mpi-head
+    volumes:
+      - ../benchmarks:/app/benchmarks
+      - ../datasets:/app/datasets
+      - ssh-keys:/root/.ssh
+    ports:
+      - "2222:22"
+    environment:
+      - DATASET=${DATASET:-sift100m}
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - I_MPI_HYDRA_IFACE=eth0
+      - I_MPI_FABRICS=tcp
+      - I_MPI_SHM=off
+      - I_MPI_TCP_NETMASK=eth0
+      - NUM_WORKERS=4
+    networks:
+      harmony-net:
+        ipv4_address: 10.5.0.10
+    depends_on:
+      - base
+      - mpi-worker-1
+      - mpi-worker-2
+      - mpi-worker-3
+      - mpi-worker-4
+    command:
+      - /bin/bash
+      - -c
+      - |
+        echo 'Starting SSH service on head node...'
+        /usr/sbin/sshd
+        
+        echo 'Waiting for workers to be ready...'
+        sleep 5
+        
+        echo "Creating MPI hostfile with 4 workers..."
+        echo "mpi-head" > /app/mpi/hostfile
+        for i in $(seq 1 4); do
+          echo "mpi-worker-$$i" >> /app/mpi/hostfile
+        done
+        
+        echo 'Configuring SSH for external access...'
+        sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+        sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+        sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+        sed -i 's/#ListenAddress 0.0.0.0/ListenAddress 0.0.0.0/' /etc/ssh/sshd_config
+        /usr/sbin/sshd -t && /usr/sbin/sshd
+        
+        echo "MPI cluster ready with 4 workers!"
+        echo "Connect from external VM using: ssh -p 2222 root@<host_ip>"
+        
+        tail -f /dev/null
+
+  mpi-worker-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mpi
+    image: harmony-mpi
+    hostname: mpi-worker-1
+    container_name: harmony-mpi-worker-1
+    volumes:
+      - ../benchmarks:/app/benchmarks
+      - ../datasets:/app/datasets
+      - ssh-keys:/root/.ssh
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - I_MPI_HYDRA_IFACE=eth0
+      - I_MPI_FABRICS=tcp
+      - I_MPI_SHM=off
+      - I_MPI_TCP_NETMASK=eth0
+    networks:
+      harmony-net:
+        ipv4_address: 10.5.0.11
+    depends_on:
+      - base
+    command: /usr/sbin/sshd -D
+
+  mpi-worker-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mpi
+    image: harmony-mpi
+    hostname: mpi-worker-2
+    container_name: harmony-mpi-worker-2
+    volumes:
+      - ../benchmarks:/app/benchmarks
+      - ../datasets:/app/datasets
+      - ssh-keys:/root/.ssh
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - I_MPI_HYDRA_IFACE=eth0
+      - I_MPI_FABRICS=tcp
+      - I_MPI_SHM=off
+      - I_MPI_TCP_NETMASK=eth0
+    networks:
+      harmony-net:
+        ipv4_address: 10.5.0.12
+    depends_on:
+      - base
+    command: /usr/sbin/sshd -D
+
+  mpi-worker-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mpi
+    image: harmony-mpi
+    hostname: mpi-worker-3
+    container_name: harmony-mpi-worker-3
+    volumes:
+      - ../benchmarks:/app/benchmarks
+      - ../datasets:/app/datasets
+      - ssh-keys:/root/.ssh
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - I_MPI_HYDRA_IFACE=eth0
+      - I_MPI_FABRICS=tcp
+      - I_MPI_SHM=off
+      - I_MPI_TCP_NETMASK=eth0
+    networks:
+      harmony-net:
+        ipv4_address: 10.5.0.13
+    depends_on:
+      - base
+    command: /usr/sbin/sshd -D
+
+  mpi-worker-4:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mpi
+    image: harmony-mpi
+    hostname: mpi-worker-4
+    container_name: harmony-mpi-worker-4
+    volumes:
+      - ../benchmarks:/app/benchmarks
+      - ../datasets:/app/datasets
+      - ssh-keys:/root/.ssh
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - I_MPI_HYDRA_IFACE=eth0
+      - I_MPI_FABRICS=tcp
+      - I_MPI_SHM=off
+      - I_MPI_TCP_NETMASK=eth0
+    networks:
+      harmony-net:
+        ipv4_address: 10.5.0.14
+    depends_on:
+      - base
+    command: /usr/sbin/sshd -D
+
+networks:
+  harmony-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.5.0.0/24
+          gateway: 10.5.0.1
+
+volumes:
+  ssh-keys:

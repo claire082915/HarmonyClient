@@ -1,0 +1,57 @@
+# Benchmarks directory (MAIN CULPRIT - 48GB)
+benchmarks/
+
+# Build artifacts
+build/
+release/
+*.o
+*.so
+*.a
+*.out
+
+# Large compressed files
+*.tar.gz
+*.tar
+*.gz
+bigann_gnd.tar.gz
+sift.tar.gz
+
+# Log files
+*.log
+harmony_sift100M.log
+screenlog.0
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*~
+.clang-format
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Documentation (unless needed in container)
+README.md
+LICENSE
+
+# Docker files themselves
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Third party (if already in base image or will be built)
+# third_party/
+
+# Only include what you actually need:
+# - src/ (your source code)
+# - CMakeLists.txt (build configuration)
+# - Any required config files
+
+# Everything else should be excluded or installed fresh in the container

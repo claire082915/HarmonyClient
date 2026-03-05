@@ -1,0 +1,70 @@
+FROM ubuntu:22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install base dependencies (excluding cmake - will install newer version)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    wget \
+    gnupg2 \
+    software-properties-common \
+    libssl-dev \
+    libeigen3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CMake 3.27 (newer than required 3.23.1)
+RUN wget -q https://github.com/Kitware/CMake/releases/download/v3.27.9/cmake-3.27.9-linux-x86_64.sh && \
+    chmod +x cmake-3.27.9-linux-x86_64.sh && \
+    ./cmake-3.27.9-linux-x86_64.sh --skip-license --prefix=/usr/local && \
+    rm cmake-3.27.9-linux-x86_64.sh
+
+# Install GCC 13.2
+RUN add-apt-repository ppa:ubuntu-toolchain-r/test -y && \
+    apt-get update && \
+    apt-get install -y gcc-13 g++-13 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for GCC 13.2 at expected paths
+RUN mkdir -p /root/gcc-13.2/bin && \
+    ln -s /usr/bin/gcc-13 /root/gcc-13.2/bin/gcc && \
+    ln -s /usr/bin/g++-13 /root/gcc-13.2/bin/g++ && \
+    mkdir -p /root/gcc-13.2/lib64 && \
+    ln -s /usr/lib/x86_64-linux-gnu/* /root/gcc-13.2/lib64/ 2>/dev/null || true
+
+# Install Intel oneAPI Base Toolkit (includes MKL, TBB, etc.)
+RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | \
+    gpg --dearmor > /usr/share/keyrings/oneapi-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | \
+    tee /etc/apt/sources.list.d/oneAPI.list && \
+    apt-get update && \
+    apt-get install -y \
+    intel-oneapi-compiler-dpcpp-cpp \
+    intel-oneapi-mkl-devel \
+    intel-oneapi-mpi-devel \
+    intel-oneapi-tbb-devel \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up environment variables for Intel oneAPI
+ENV ONEAPI_ROOT=/opt/intel/oneapi
+ENV LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib:/opt/intel/oneapi/compiler/latest/lib:/opt/intel/oneapi/mpi/latest/lib:/opt/intel/oneapi/tbb/latest/lib:${LD_LIBRARY_PATH}
+ENV PATH=/opt/intel/oneapi/compiler/latest/bin:/opt/intel/oneapi/mpi/latest/bin:${PATH}
+RUN echo "source /opt/intel/oneapi/setvars.sh --force" >> /etc/bash.bashrc
+
+# Set GCC 13 paths
+ENV PATH=/root/gcc-13.2/bin:$PATH
+ENV LD_LIBRARY_PATH=/root/gcc-13.2/lib64:$LD_LIBRARY_PATH
+
+WORKDIR /app
+
+# Copy source code
+COPY . .
+
+# Build with oneAPI environment
+RUN bash -c "source /opt/intel/oneapi/setvars.sh && \
+    mkdir -p release && cd release && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j$(nproc)"
+
+CMD ["/bin/bash"]
