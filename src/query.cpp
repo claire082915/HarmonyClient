@@ -410,6 +410,11 @@ int main(int argc, char* argv[]) {
             auto query = std::make_unique<float[]>(nq * d);
             recv_all(client_fd, query.get(), nq * d * sizeof(float));
 
+            cout << std::format("[Master] Received {} vectors (d={}). First vector: ", nq, d);
+            for (size_t i = 0; i < std::min(d, (size_t)5); ++i)
+                cout << std::format("{:.4f} ", query[i]);
+            cout << "\n";
+
             // 3. Signal workers: SEARCH
             int sig = WORKER_SIGNAL_SEARCH;
             MPI_Bcast(&sig, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -440,13 +445,41 @@ int main(int argc, char* argv[]) {
                                             gt_I.get(), gt_D.get(), nq, job_k, metric);
 
                 Stats stats;
+                // identity
+                stats.mode       = Index::to_string(searchMode);
+                stats.nb         = nb;
+                stats.nq         = nq;
+                stats.d          = d;
+                stats.k          = job_k;
+                stats.nlist      = nlist;
                 stats.nprobe     = serve_nprobe;
-                stats.query_time = search_time;
-                stats.recall     = recall;
-                stats.r2         = r2;
+                // topology
                 stats.worker     = workerCount;
-                stats.nb = nb; stats.nq = nq; stats.d = d; stats.k = job_k;
-                stats.mode = Index::to_string(searchMode);
+                stats.block      = blockCount;
+                stats.group      = groupCount;
+                stats.team       = teamCount;
+                // flags
+                stats.divideIVF          = false;
+                stats.disableOrderOptimize = disableOrderOptimize;
+                stats.blockSend          = blockSend;
+                stats.pruning            = pruning;
+                stats.opt_level          = added_opt_levels;
+                // timing
+                stats.query_time         = search_time;
+                stats.original_time      = 0;
+                stats.faiss_query_time   = 0;   // not run in serve mode → time_speedup will be 0
+                stats.trainTime          = index.trainTime;
+                stats.addTime            = index.addTime;
+                stats.preSearchTime      = index.preSearchTime;
+                // accuracy
+                stats.recall             = recall;
+                stats.r2                 = r2;
+                stats.variance           = 0;
+                // unused in serve mode
+                stats.inBalanceRatio     = 0;
+                stats.inBalanceRatioTeam = 0;
+                stats.brute_ratio        = 0;
+                stats.simi_ratio         = 0;
                 stats.print();
 
                 std::string log_path = std::format("{}/{}/result/log_serve.csv",
