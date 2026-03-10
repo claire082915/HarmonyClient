@@ -1,4 +1,4 @@
-// master_server.cpp  — TCP replacement for the gRPC-based server
+// master_server.cpp
 
 #include "master_server.h"
 
@@ -98,6 +98,9 @@ void MasterTcpServer::Shutdown() {
 //   - nq == 0  (graceful shutdown from client), or
 //   - TCP error (client disconnected), or
 //   - stop_ flag is set.
+//
+// Sets done_ = true and notifies queue_cv_ before returning so the MPI
+// master loop can unblock even if no job arrived.
 // ---------------------------------------------------------------------------
 void MasterTcpServer::ServeLoop() {
     while (!stop_) {
@@ -188,6 +191,10 @@ void MasterTcpServer::ServeLoop() {
     }
 
     std::cout << "[Master] TCP server thread exiting.\n";
+
+    // Signal the MPI master loop that no more jobs will arrive
+    done_ = true;
+    queue_cv_->notify_all();
 }
 
 } // namespace harmony

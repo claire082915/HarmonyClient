@@ -1,6 +1,6 @@
 #pragma once
 
-// master_server.h  — TCP replacement for the gRPC-based server
+// master_server.h  — TCP server for the query phase
 //
 // Protocol (little-endian, same as client.cpp):
 //   Client -> Master:  [uint64 nq][uint64 k][nq*d floats]
@@ -56,6 +56,9 @@ struct SearchJob {
 //   4. Waits for the job to be marked done.
 //   5. Sends distances + labels back to the client.
 //   6. Loops until nq==0 (shutdown) or client disconnects.
+//
+// IsDone() returns true once the background thread has exited its serve loop,
+// allowing the MPI master loop to unblock and shut down cleanly.
 // ---------------------------------------------------------------------------
 class MasterTcpServer {
 public:
@@ -75,6 +78,11 @@ public:
     // Signal the background thread to stop and join it.
     void Shutdown();
 
+    // Returns true once ServeLoop has finished (client sent nq=0, disconnected,
+    // or Shutdown() was called).  The MPI master loop uses this to know when
+    // no more jobs will arrive.
+    bool IsDone() const { return done_; }
+
 private:
     void ServeLoop();   // runs on background thread
 
@@ -83,7 +91,7 @@ private:
 
     std::string address_;
     uint16_t    port_;
-    size_t      d_;          // vector dimension (needed to validate incoming data)
+    size_t      d_;          // vector dimension
 
     std::shared_ptr<std::queue<std::shared_ptr<SearchJob>>> job_queue_;
     std::shared_ptr<std::mutex>              queue_mutex_;
@@ -92,6 +100,7 @@ private:
     int         server_fd_ = -1;
     std::thread thread_;
     std::atomic<bool> stop_{ false };
+    std::atomic<bool> done_{ false };  // set to true when ServeLoop exits
 };
 
 } // namespace harmony

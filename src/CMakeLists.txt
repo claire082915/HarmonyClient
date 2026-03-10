@@ -5,35 +5,30 @@ set(SRC_FILES
     Index.cpp
     IVF.cpp
     node.cpp
-    # utils.cpp
 )
 
 add_library(Harmony STATIC ${SRC_FILES})
 
-target_link_libraries(Harmony PUBLIC OpenMP::OpenMP_CXX
-                                    mkl_intel_lp64
-                                    mkl_sequential
-                                    mkl_core
-                                    MPI::MPI_CXX)
+target_link_libraries(Harmony PUBLIC
+    OpenMP::OpenMP_CXX
+    mkl_intel_lp64
+    mkl_sequential
+    mkl_core
+    MPI::MPI_CXX
+)
 
 add_executable(main main.cpp)
 target_link_libraries(main Harmony faiss)
 
-add_executable(query query.cpp)
+# query binary — no gRPC, no master_server needed
+add_executable(query query.cpp master_server.cpp)
 target_link_libraries(query Harmony faiss)
 
-# add_executable(divide divide.cpp)
-# target_link_libraries(divide Tribase faiss)
-# add_subdirectory(tests)
-
-# ---- New standalone client binary ----
+# Standalone TCP client — no MPI, no Harmony lib needed
 add_executable(harmony_client client.cpp)
 target_include_directories(harmony_client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party
-)
-target_include_directories(harmony_client PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # ============================================================

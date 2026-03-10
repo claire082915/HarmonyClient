@@ -765,6 +765,18 @@ void GroupWorker::receiveQuery() {
 
     MPI_Barrier(MPI_COMM_WORLD); // Corresponds to the barrier at the end of preSearch
 
+    // Zero distance buffers from previous query — searchBlock does += so
+    // stale values from the prior query corrupt results and cause hangs.
+    for (size_t i = 0; i < distancesForBlocks.size(); i++) {
+        for (size_t j = 0; j < distancesForBlocks[i].size(); j++) {
+            std::fill_n(distancesForBlocks[i][j].get(), blockDistancesSize, 0.0f);
+        }
+    }
+
+    for (size_t i = 0; i < info.groupCount; i++) {
+        init_result(METRIC_L2, presumeNq * presumeK, distanceHeap[i].get(), idHeap[i].get());
+    }
+
     uniWatch = MyStopWatch(false, "uniWatch", MAG);
     uniWatch.print(format("node {} cross barrier", rank), false);
     // nq, querys
