@@ -87,7 +87,7 @@ cmake --build release -j
 Run benchmark mode once to generate the groundtruth file:
 
 ```bash
-mpirun -n 5 -bind-to none ./release/bin/query \
+mpirun -n 5 ./release/bin/query \
     --benchmarks_path ./benchmarks --dataset sift1m \
     --k 100 --nprobes 1000 --run_faiss --verbose
 ```
@@ -100,7 +100,7 @@ Fastest way to test the query path. Requires a cached index on disk.
 
 **Terminal 1 — server:**
 ```bash
-mpirun -n 5 -bind-to none ./release/bin/query \
+mpirun -n 5 ./release/bin/query \
     --benchmarks_path ./benchmarks --dataset sift1m \
     --serve --skip_insert --cache \
     --tcp_port 7777 --nprobe 100 \
@@ -121,7 +121,7 @@ mpirun -n 5 -bind-to none ./release/bin/query \
 
 **Terminal 1 — server:**
 ```bash
-mpirun -n 5 -bind-to none ./release/bin/query \
+mpirun -n 5 ./release/bin/query \
     --benchmarks_path ./benchmarks --dataset sift1m \
     --serve \
     --train_data ./benchmarks/sift1m/origin/sift1m_base.fvecs \
@@ -204,7 +204,7 @@ when `--group` and `--block` are provided.
 ## Benchmark Mode (unchanged)
 
 ```bash
-mpirun -n 5 -bind-to none ./release/bin/query \
+mpirun -n 5 ./release/bin/query \
     --benchmarks_path ./benchmarks --dataset sift1m \
     --cache --group 2 --team 2 --block 4 --nprobes 100 --k 100
 ```
