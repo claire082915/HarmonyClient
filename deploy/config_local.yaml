@@ -1,0 +1,41 @@
+azure:
+  username: csl12    # run `whoami` to get this
+  ssh_private_key: ~/.ssh/test-key
+
+install_dir: ~/Harmony
+oneapi_setvars: ~/intel/oneapi/setvars.sh
+gcc_prefix: ~/gcc-13.2
+repo_url: https://github.com/claire082915/HarmonyClient
+repo_branch: main
+
+cluster:
+  client_name: harmony-client
+  tcp_port: 7777
+
+experiment:
+  dataset: sift1m
+  benchmarks_path: ~/Harmony/benchmarks
+  group: 2
+  team: 2
+  block: 4
+  nprobe: 100
+  k: 100
+  cache: true
+  skip_insert: true
+  query_batch: 96
+
+local_logs_dir: ~/harmony_logs
+
+nodes:
+  - name: harmony-client
+    ip: 127.0.0.1
+    private_ip: 127.0.0.1
+    type: client
+  - name: harmony-1
+    ip: 127.0.0.1
+    private_ip: 127.0.0.1
+    type: master
+  - name: harmony-2
+    ip: 127.0.0.1
+    private_ip: 127.0.0.1
+    type: worker

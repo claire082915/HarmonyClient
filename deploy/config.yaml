@@ -1,0 +1,94 @@
+# Configuration for Harmony deployment scripts
+# Used by build_nodes.py and start_services.py
+#
+# Required before running:
+#   az login
+#   export AZURE_SUBSCRIPTION_ID="<your-subscription-id>"
+
+azure:
+  username: azureuser
+  ssh_private_key: ~/.ssh/azure-key.pem
+
+resource_group:
+  name: HORIZANN-RG
+  location: centralus
+
+cluster:
+  vm_range: "1-2"        # horizann-4 = master, horizann-5 & 6 = workers
+  num_workers: 1           
+
+# Harmony dataset / index settings — passed to `query` (server) and `harmony_client`
+experiment:
+  benchmarks_path: ~/Harmony/benchmarks
+  dataset: bigann
+  group: 2
+  team: 2
+  block: 4
+  nprobe: 100
+  mode: group                         # group | flat | etc.
+  cache: true                         # pass --cache flag to load index from disk
+  skip_insert: false                   # pass --skip_insert (requires --cache)
+  k: 100
+  query_batch: 2000                    
+  query_loop: 1                       # repeat query phase N times
+
+serve:
+  nb: 100000000
+  dim: 128
+  train_data: ~/Harmony/benchmarks/sift1m/origin/sift1m_base.fvecs
+
+# Client binary settings
+client:
+  query_file: "~/data/sift1b/bigann_query.bvecs"         # overrides experiment.benchmarks_path/dataset path if set
+  base_file: "~/data/sift1b/bigann_base.bvecs"          # only needed when skip_insert: false
+  groundtruth_file: "~/data/sift1b/gnd/idx_100M.ivecs"   # overrides default groundtruth path if set
+  nq: 0                  # 0 = all queries
+  nb: 100000000
+
+# MPI launcher settings (used on master+worker nodes)
+mpi:
+  hosts_file: ~/mpi_hosts             # written by start_services.py from discovered IPs
+  # Total mpirun -n = 1 (master rank 0) + num_workers
+  # Each line in hosts_file: <ip> slots=1
+
+repo_url: https://github.com/claire082915/HarmonyClient
+repo_branch: main
+install_dir: ~/Harmony
+
+# oneAPI / MKL environment — sourced before cmake and mpirun
+oneapi_setvars: /opt/intel/oneapi/setvars.sh
+
+# GCC-13 install prefix (set in CMakeLists; must exist on every node)
+gcc_prefix: ~/gcc-13.2
+
+local_logs_dir: ~/harmony_logs       # local dir for --download-logs
+
+nodes:
+  - name: horizann-client
+    ip: 52.230.187.166
+    private_ip: 10.0.0.5
+    type: client
+  - name: horizann-1
+    ip: 135.119.46.13
+    private_ip: 10.0.0.10
+    type: master
+  - name: horizann-2
+    ip: 20.12.216.94
+    private_ip: 10.0.0.11
+    type: worker
+
+# VM provisioning (reference only — not used by build/start scripts)
+provisioning:
+  vm_size: Standard_D48as_v7
+  ssh_public_key: ~/.ssh/azure-key.pub
+  image_reference:
+    publisher: Canonical
+    offer: 0001-com-ubuntu-server-jammy
+    sku: 22_04-lts-gen2
+    version: latest
+  network:
+    vnet_name: harmony-vnet
+    subnet_name: harmony-subnet
+    nsg_name: harmony-nsg
+    vnet_address_prefix: 10.0.0.0/16
+    subnet_address_prefix: 10.0.0.0/24
