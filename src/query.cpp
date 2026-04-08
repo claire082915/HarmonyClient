@@ -170,6 +170,14 @@ int main(int argc, char* argv[]) {
     program.add_argument("--serve")
         .help("Accept TCP client connections and serve queries")
         .default_value(false).implicit_value(true);
+    program.add_argument("--nb")
+        .help("Number of base vectors (serve mode, skips file read)")
+        .default_value(size_t(0))
+        .scan<'u', size_t>();
+    program.add_argument("--dim")
+        .help("Vector dimension (serve mode, skips file read)")
+        .default_value(size_t(0))
+        .scan<'u', size_t>();
     program.add_argument("--nprobe")
         .help("nprobe for serve mode")
         .default_value(100ul)
@@ -366,8 +374,10 @@ int main(int argc, char* argv[]) {
     std::string base_path  = std::format("{}/{}/origin/{}_base.{}",  benchmarks_path, dataset, dataset, input_format);
     std::string query_path = std::format("{}/{}/origin/{}_query.{}", benchmarks_path, dataset, dataset, input_format);
 
-    size_t nb, d;
-    std::tie(nb, d) = loadXvecsInfo(base_path);
+    size_t nb = program.get<size_t>("--nb");
+    size_t d  = program.get<size_t>("--dim");
+    if (!serve_mode || nb == 0 || d == 0)
+        std::tie(nb, d) = loadXvecsInfo(base_path);
     if (nlist == 0) nlist = static_cast<size_t>(std::sqrt(nb));
     size_t sub_nlist  = std::sqrt(nb / nlist);
     size_t sub_nprobe = std::max(static_cast<size_t>(sub_nlist * sub_nprobe_ratio), 1ul);
