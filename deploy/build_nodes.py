@@ -61,50 +61,70 @@ def _source_oneapi(config: Dict) -> str:
 # ---------------------------------------------------------------------------
 
 def install_deps(server: str, ssh_key: str, install_gcc: bool, config: Dict) -> bool:
-    """Install apt packages and (optionally) build GCC-13."""
-    print(f"\n[{server}] Installing system packages…")
-    pkgs = (
-        "build-essential cmake git pkg-config "
-        "libopenmpi-dev openmpi-bin "
-        "libomp-dev "
-        "python3-pip wget curl"
-    )
+    """Install all dependencies: oneAPI MKL, GCC-13, cmake, eigen."""
+    
+    # 1. Install oneAPI MKL
+    print(f"\n[{server}] Installing Intel oneAPI MKL...")
+    mkl_cmds = " && ".join([
+        "wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null",
+        "echo 'deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main' | sudo tee /etc/apt/sources.list.d/oneAPI.list",
+        "sudo apt-get update -qq",
+        "sudo apt-get install -y intel-oneapi-mkl-devel",
+    ])
+    code = ssh_exec_stream(server, mkl_cmds, ssh_key)
+    if code != 0:
+        print(f"[{server}] WARNING: oneAPI MKL install had non-zero exit — continuing")
+
+    # 2. Install GCC-13
+    print(f"\n[{server}] Installing GCC-13...")
+    gcc_cmds = " && ".join([
+        "sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y",
+        "sudo apt-get update -qq",
+        "sudo apt-get install -y gcc-13 g++-13",
+        "mkdir -p ~/gcc-13.2/bin",
+        "ln -sf /usr/bin/gcc-13 ~/gcc-13.2/bin/gcc",
+        "ln -sf /usr/bin/g++-13 ~/gcc-13.2/bin/g++",
+    ])
+    code = ssh_exec_stream(server, gcc_cmds, ssh_key)
+    if code != 0:
+        print(f"[{server}] WARNING: GCC-13 install had non-zero exit — continuing")
+
+    # 3. Install cmake via snap
+    print(f"\n[{server}] Installing cmake via snap...")
+    cmake_cmds = " && ".join([
+        "sudo apt-get remove -y cmake 2>/dev/null || true",
+        "sudo snap install cmake --classic",
+        "export PATH=/snap/bin:$PATH",
+    ])
+    code = ssh_exec_stream(server, cmake_cmds, ssh_key)
+    if code != 0:
+        print(f"[{server}] WARNING: cmake install had non-zero exit — continuing")
+
+    # 4. Install Eigen
+    print(f"\n[{server}] Installing Eigen3...")
     code = ssh_exec_stream(
         server,
-        f"sudo apt-get update -qq && sudo apt-get install -y {pkgs}",
+        "sudo apt-get install -y libeigen3-dev",
         ssh_key,
     )
     if code != 0:
-        print(f"[{server}] WARNING: apt-get had non-zero exit — continuing anyway")
+        print(f"[{server}] WARNING: Eigen install had non-zero exit — continuing")
 
-    if install_gcc:
-        gcc_prefix = config.get("gcc_prefix", "~/gcc-13.2")
-        print(f"\n[{server}] Building GCC-13 (this takes ~20 minutes)…")
-        gcc_cmds = " && ".join([
-            "sudo apt-get install -y libgmp-dev libmpfr-dev libmpc-dev",
-            "cd ~",
-            "wget -q https://ftp.gnu.org/gnu/gcc/gcc-13.2.0/gcc-13.2.0.tar.xz",
-            "tar -xf gcc-13.2.0.tar.xz",
-            "cd gcc-13.2.0",
-            "./contrib/download_prerequisites",
-            f"mkdir -p ~/gcc-build && cd ~/gcc-build",
-            f"~/gcc-13.2.0/configure --prefix={gcc_prefix} --enable-languages=c,c++ "
-            "--disable-multilib --disable-bootstrap",
-            f"make -j$(nproc)",
-            f"make install",
-        ])
-        code = ssh_exec_stream(server, gcc_cmds, ssh_key)
-        if code != 0:
-            print(f"[{server}] ✗ GCC-13 build failed")
-            return False
-
-    # Eigen (lightweight header-only — just clone if missing)
-    print(f"\n[{server}] Ensuring Eigen is present at ~/eigen…")
+    # 5. Install other base packages
+    print(f"\n[{server}] Installing base packages...")
+    pkgs = (
+        "build-essential git pkg-config "
+        "libopenmpi-dev openmpi-bin "
+        "libomp-dev python3-pip wget curl"
+    )
     code = ssh_exec_stream(
         server,
-        "test -d ~/eigen || git clone --depth 1 https://gitlab.com/libeigen/eigen.git ~/eigen",
+        f"sudo apt-get install -y {pkgs}",
         ssh_key,
     )
+    if code != 0:
+        print(f"[{server}] WARNING: base packages had non-zero exit — continuing")
+
     return True
 
 
@@ -147,6 +167,7 @@ def build_harmony(server: str, ssh_key: str, config: Dict) -> bool:
 
     build_cmd = " && ".join([
         f"cd {install_dir}",
+        "export PATH=/snap/bin:$PATH",
         source_oneapi,
         "cmake -B release -DCMAKE_BUILD_TYPE=Release .",
         "cmake --build release -j$(nproc)",

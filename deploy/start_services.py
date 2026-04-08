@@ -194,7 +194,7 @@ def build_server_command(config: Dict, num_ranks: int, hosts_path: str) -> str:
         f"--dataset {dataset} "
         f"--serve "
         f"--tcp_port {tcp_port} "
-        f"--nprobe {nprobe} "
+        f"--nprobes {nprobe} "
         f"--group {group} "
         f"--team {team} "
         f"--block {block} "
@@ -211,6 +211,7 @@ def build_server_command(config: Dict, num_ranks: int, hosts_path: str) -> str:
 
     # -x passes environment variables through MPI
     mpirun = (
+        f"OMP_NUM_THREADS=$(nproc) "
         f"mpirun -n {num_ranks} "
         f"--hostfile {hosts_path} "
         f"-x PATH -x LD_LIBRARY_PATH "
@@ -312,8 +313,8 @@ def start_server(master_node: Dict, nodes: List[Dict], config: Dict, timestamp: 
     _tmux_run(server, launch, ssh_key)
 
     # Give the server a moment to start listening
-    log.info(f"[{server}] Waiting 60 s for server to initialize…")
-    time.sleep(60)
+    log.info(f"[{server}] Waiting 8 s for server to initialize…")
+    time.sleep(8)
 
     # Verify mpirun is alive
     code, stdout, _ = ssh_exec(
