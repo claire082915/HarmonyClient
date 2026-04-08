@@ -126,6 +126,31 @@ load_fvecs(const std::string& path, size_t max_vecs = 0) {
     return {std::move(data), nv, d};
 }
 
+// Load bvecs — converts uint8 to float, returns (data, nVecs, dim)
+// ---------------------------------------------------------------------------
+static std::tuple<std::vector<float>, size_t, size_t>
+load_bvecs(const std::string& path, size_t max_vecs = 0) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) throw std::runtime_error("Cannot open: " + path);
+    std::vector<float> data;
+    size_t nv = 0, d = 0;
+    while (f) {
+        int32_t dim = 0;
+        if (!f.read(reinterpret_cast<char*>(&dim), sizeof(int32_t))) break;
+        if (d == 0) d = static_cast<size_t>(dim);
+        if (static_cast<size_t>(dim) != d) throw std::runtime_error("Inconsistent dim in " + path);
+        std::vector<uint8_t> buf(d);
+        f.read(reinterpret_cast<char*>(buf.data()), d);
+        if (!f) break;
+        data.resize(data.size() + d);
+        for (size_t i = 0; i < d; ++i)
+            data[nv * d + i] = static_cast<float>(buf[i]);
+        ++nv;
+        if (max_vecs > 0 && nv >= max_vecs) break;
+    }
+    return {std::move(data), nv, d};
+}
+
 // ---------------------------------------------------------------------------
 // Load ivecs — returns (data, nVecs, dim)
 // ---------------------------------------------------------------------------
@@ -348,7 +373,9 @@ int main(int argc, char** argv) {
     // ------------------------------------------------------------------
     if (do_insert) {
         std::cout << std::format("[Client] Loading base vectors from {}...\n", base_path);
-        auto [base_data, total_nb, d] = load_fvecs(base_path, max_nb);
+        auto [base_data, total_nb, d] = base_path.ends_with(".bvecs") 
+            ? load_bvecs(base_path, max_nb) 
+            : load_fvecs(base_path, max_nb);
         std::cout << std::format("[Client] Loaded {} base vectors (d={})\n", total_nb, d);
 
         size_t sent = 0;
@@ -419,7 +446,9 @@ int main(int argc, char** argv) {
     // ------------------------------------------------------------------
     if (do_query) {
         std::cout << std::format("[Client] Loading query vectors from {}...\n", query_path);
-        auto [query_data, total_nq, d] = load_fvecs(query_path, max_nq);
+        auto [query_data, total_nq, d] = query_path.ends_with(".bvecs")
+            ? load_bvecs(query_path, max_nq)
+            : load_fvecs(query_path, max_nq);
         std::cout << std::format("[Client] Loaded {} query vectors (d={})\n", total_nq, d);
 
         // Load groundtruth if provided
