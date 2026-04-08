@@ -364,8 +364,31 @@ int main(int argc, char** argv) {
         throw std::runtime_error("Invalid host: " + host);
 
     std::cout << std::format("[Client] Connecting to {}:{}...\n", host, port);
-    if (::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
-        throw std::runtime_error("connect() failed — is the server running with --serve?");
+    int max_retries = 100; // retry for up to 30 minutes
+    int retry_delay = 60;   // seconds between retries
+    bool connected = false;
+    for (int attempt = 0; attempt < max_retries; attempt++) {
+        if (::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+            connected = true;
+            break;
+        }
+        if (attempt == 0)
+            std::cout << "[Client] Server not ready yet, waiting...\n";
+        std::cout << std::format("[Client] Retrying connection in {}s (attempt {}/{})...\n",
+                                    retry_delay, attempt + 1, max_retries);
+        std::this_thread::sleep_for(std::chrono::seconds(retry_delay));
+        ::close(sock);
+        sock = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) throw std::runtime_error("socket() failed on retry");
+        // Re-set up the address
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port   = htons(static_cast<uint16_t>(port));
+        if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) <= 0)
+            throw std::runtime_error("Invalid host: " + host);
+    }
+    if (!connected)
+        throw std::runtime_error("connect() failed after 30 minutes — is the server running with --serve?");
     std::cout << "[Client] Connected.\n";
 
     // ------------------------------------------------------------------
@@ -501,6 +524,9 @@ int main(int argc, char** argv) {
                 send_all(sock, hdr, sizeof(hdr));
                 send_all(sock, ptr, this_batch * d * sizeof(float));
 
+                auto t_sent = std::chrono::high_resolution_clock::now();
+                double send_time = std::chrono::duration<double>(t_sent - t0).count();
+
                 std::cout << std::format("[Client] QUERY batch {}: sent {} queries\n",
                                          batch_idx, this_batch);
 
@@ -510,11 +536,13 @@ int main(int argc, char** argv) {
                 recv_all(sock, labels.data(),    this_batch * k * sizeof(int64_t));
 
                 auto t1 = std::chrono::high_resolution_clock::now();
-                double elapsed = std::chrono::duration<double>(t1 - t0).count();
+                double recv_time = std::chrono::duration<double>(t1 - t_sent).count();
+                double elapsed   = std::chrono::duration<double>(t1 - t0).count();
                 total_query_time += elapsed;
 
-                std::cout << std::format("[Client] QUERY batch {} done in {:.4f}s\n",
-                                         batch_idx, elapsed);
+                std::cout << std::format("[Client] QUERY batch {} done in {:.4f}s  "
+                         "[send={:.4f}s  server+recv={:.4f}s]\n",
+                         batch_idx, elapsed, send_time, recv_time);
 
                 // Print first few results
                 for (size_t q = 0; q < std::min(this_batch, (size_t)3); ++q) {
