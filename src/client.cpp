@@ -69,6 +69,8 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <cerrno>
+#include <csignal>
 
 // ---------------------------------------------------------------------------
 // Opcodes — must match query.cpp
@@ -87,8 +89,12 @@ static constexpr uint8_t STATUS_ERROR = 0x01;
 static void send_all(int fd, const void* buf, size_t n) {
     const char* p = static_cast<const char*>(buf);
     while (n > 0) {
-        ssize_t s = ::send(fd, p, n, 0);
-        if (s <= 0) throw std::runtime_error("send failed");
+        ssize_t s = ::send(fd, p, n, MSG_NOSIGNAL);
+        if (s < 0) {
+            if (errno == EINTR) continue;
+            throw std::runtime_error(std::string("send failed: ") + strerror(errno));
+        }
+        if (s == 0) throw std::runtime_error("send failed: connection closed");
         p += s; n -= s;
     }
 }
@@ -96,7 +102,11 @@ static void recv_all(int fd, void* buf, size_t n) {
     char* p = static_cast<char*>(buf);
     while (n > 0) {
         ssize_t s = ::recv(fd, p, n, 0);
-        if (s <= 0) throw std::runtime_error("recv failed / server disconnected");
+        if (s < 0) {
+            if (errno == EINTR) continue;
+            throw std::runtime_error(std::string("recv failed: ") + strerror(errno));
+        }
+        if (s == 0) throw std::runtime_error("recv failed: server disconnected");
         p += s; n -= s;
     }
 }
@@ -257,6 +267,7 @@ static float compute_recall(
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
+    signal(SIGPIPE, SIG_IGN);
     argparse::ArgumentParser prog("harmony_client");
     prog.add_argument("--base")
         .help("Path to base .fvecs for INSERT phase")
