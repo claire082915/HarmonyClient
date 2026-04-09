@@ -603,6 +603,10 @@ int main(int argc, char* argv[]) {
                         Stopwatch sw;
                         index.add(total_inserted, all_vectors.data());
                         cout << std::format("[Master] index.add() done in {:.3f}s\n", sw.elapsedSeconds());
+                        // Save index to disk for future --cache --skip_insert runs
+                        cout << std::format("[Master] Saving index to {}...\n", index_path);
+                        index.save_index(index_path);
+                        cout << std::format("[Master] Index saved.\n");
                     }
                     cout << "[Master] Sample IDs in list 0: ";
                     for (size_t i = 0; i < std::min((size_t)5, index.lists[0].get_list_size()); ++i)
