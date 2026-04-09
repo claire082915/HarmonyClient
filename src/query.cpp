@@ -572,26 +572,31 @@ int main(int argc, char* argv[]) {
                     uint64_t n_recv = 0;
                     try { recv_all(ins_client_fd, &n_recv, sizeof(n_recv)); }
                     catch (...) {
-                        cerr << "[Master] Failed to read INSERT header.\n";
                         send_all(ins_client_fd, &STATUS_ERROR, 1);
-                        continue;
+                        break;
                     }
                     size_t n = static_cast<size_t>(n_recv);
+                    size_t old_size = total_inserted * d;
+                    all_vectors.resize(old_size + n * d);
 
+                    auto t_recv_start = std::chrono::high_resolution_clock::now();
                     cout << std::format("[Master] OP_INSERT: receiving {} vectors (d={})...\n", n, d);
 
-                    size_t old_size = all_vectors.size();
-                    all_vectors.resize(old_size + n * d);
                     try { recv_all(ins_client_fd, all_vectors.data() + old_size, n * d * sizeof(float)); }
                     catch (...) {
-                        cerr << "[Master] Failed to read INSERT vectors.\n";
-                        all_vectors.resize(old_size);
                         send_all(ins_client_fd, &STATUS_ERROR, 1);
-                        continue;
+                        break;
                     }
 
+                    auto t_recv_end = std::chrono::high_resolution_clock::now();
+                    double recv_time  = std::chrono::duration<double>(t_recv_end - t_recv_start).count();
+                    double recv_gb    = (n * d * sizeof(float)) / (1024.0 * 1024.0 * 1024.0);
+                    double throughput = recv_gb / recv_time;
+
                     total_inserted += n;
-                    cout << std::format("[Master] OP_INSERT: buffered {} vectors (total={})\n", n, total_inserted);
+                    cout << std::format("[Master] OP_INSERT: buffered {} vectors (total={})  "
+                                        "[recv={:.3f}s  {:.2f} GB/s]\n",
+                                        n, total_inserted, recv_time, throughput);
                     send_all(ins_client_fd, &STATUS_OK, 1);
                 }
 

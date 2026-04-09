@@ -401,7 +401,7 @@ int main(int argc, char** argv) {
             : load_fvecs(base_path, max_nb);
         std::cout << std::format("[Client] Loaded {} base vectors (d={})\n", total_nb, d);
 
-        size_t sent = 0;
+        auto t_insert_start = std::chrono::high_resolution_clock::now();
         size_t batch_idx = 0;
         while (sent < total_nb) {
             size_t this_batch = std::min(insert_batch, total_nb - sent);
@@ -409,30 +409,55 @@ int main(int argc, char** argv) {
 
             auto t0 = std::chrono::high_resolution_clock::now();
 
+            // Send opcode + batch size
             send_all(sock, &OP_INSERT, 1);
             uint64_t n64 = static_cast<uint64_t>(this_batch);
             send_all(sock, &n64, sizeof(n64));
+
+            auto t_header_sent = std::chrono::high_resolution_clock::now();
+
+            // Send vector data
             send_all(sock, ptr, this_batch * d * sizeof(float));
 
-            std::cout << std::format("[Client] INSERT batch {}: sent {} vectors (offset={})\n",
-                                     batch_idx, this_batch, sent);
+            auto t_data_sent = std::chrono::high_resolution_clock::now();
+            double header_time = std::chrono::duration<double>(t_header_sent - t0).count();
+            double data_time   = std::chrono::duration<double>(t_data_sent - t_header_sent).count();
+            double send_time   = std::chrono::duration<double>(t_data_sent - t0).count();
+            double throughput  = (this_batch * d * sizeof(float)) / (1024.0 * 1024.0 * 1024.0) / send_time;
+
+            std::cout << std::format("[Client] INSERT batch {}: sent {} vectors (offset={}) "
+                                    "[send={:.3f}s  data={:.3f}s  {:.2f} GB/s]\n",
+                                    batch_idx, this_batch, sent, send_time, data_time, throughput);
 
             uint8_t status = STATUS_ERROR;
             recv_all(sock, &status, 1);
             if (status != STATUS_OK) {
                 std::cerr << std::format("[Client] INSERT batch {} failed (status={})\n",
-                                         batch_idx, status);
+                                        batch_idx, status);
                 ::close(sock);
                 return 1;
             }
 
             auto t1 = std::chrono::high_resolution_clock::now();
-            double elapsed = std::chrono::duration<double>(t1 - t0).count();
-            std::cout << std::format("[Client] INSERT batch {} OK in {:.3f}s\n", batch_idx, elapsed);
+            double elapsed     = std::chrono::duration<double>(t1 - t0).count();
+            double server_ack  = std::chrono::duration<double>(t1 - t_data_sent).count();
+            auto   t_total     = std::chrono::duration<double>(t1 - t_insert_start).count();
+
+            std::cout << std::format("[Client] INSERT batch {} OK  "
+                                    "[round_trip={:.3f}s  server_ack={:.3f}s  cumulative={:.1f}s  "
+                                    "vectors_sent={}/{}]\n",
+                                    batch_idx, elapsed, server_ack, t_total, sent + this_batch, total_nb);
 
             sent += this_batch;
             ++batch_idx;
         }
+
+        auto t_insert_end = std::chrono::high_resolution_clock::now();
+        double total_insert_time = std::chrono::duration<double>(t_insert_end - t_insert_start).count();
+        double total_gb = (total_nb * d * sizeof(float)) / (1024.0 * 1024.0 * 1024.0);
+        std::cout << std::format("[Client] INSERT complete: {} vectors in {:.1f}s  "
+                                "({:.2f} GB  avg {:.2f} GB/s)\n",
+                                total_nb, total_insert_time, total_gb, total_gb / total_insert_time);
 
         std::cout << "[Client] Sending OP_BUILD_DONE...\n";
         send_all(sock, &OP_BUILD_DONE, 1);
