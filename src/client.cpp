@@ -402,6 +402,7 @@ int main(int argc, char** argv) {
         std::cout << std::format("[Client] Loaded {} base vectors (d={})\n", total_nb, d);
 
         auto t_insert_start = std::chrono::high_resolution_clock::now();
+        size_t sent = 0;
         size_t batch_idx = 0;
         while (sent < total_nb) {
             size_t this_batch = std::min(insert_batch, total_nb - sent);
