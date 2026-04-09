@@ -152,7 +152,8 @@ def write_mpi_hostfile(master_server: str, nodes: List[Dict], config: Dict) -> s
         key=lambda x: numeric_name_key(x["name"]),
     )
     for n in master_nodes + worker_nodes:
-        lines.append(f"{n['private_ip']} slots=1")
+        slots = n.get("slots", 1)  # ← read from config, default 1
+        lines.append(f"{n['private_ip']} slots={slots}")
 
     content = "\n".join(lines) + "\n"
     cmd = f"cat > {hosts_path} << 'HOSTSEOF'\n{content}HOSTSEOF"
@@ -211,10 +212,9 @@ def build_server_command(config: Dict, num_ranks: int, hosts_path: str) -> str:
 
     # -x passes environment variables through MPI
     mpirun = (
-        f"OMP_NUM_THREADS=$(nproc) "
         f"mpirun -n {num_ranks} "
         f"--hostfile {hosts_path} "
-        f"-x PATH -x LD_LIBRARY_PATH "
+        f"-x PATH -x LD_LIBRARY_PATH -x OMP_NUM_THREADS "
         f"{install_dir}/release/bin/query {flags}"
     )
     return mpirun
@@ -302,6 +302,7 @@ def start_server(master_node: Dict, nodes: List[Dict], config: Dict, timestamp: 
 
     launch = (
         f"{source_oneapi} && "
+        # f"export OMP_NUM_THREADS=64 && "
         f"mkdir -p {log_dir} && "
         f"cd {install_dir} && "
         f"nohup {mpirun_cmd} > {log_path} 2>&1 &"
