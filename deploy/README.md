@@ -13,7 +13,6 @@ Scripts for launching, monitoring, and managing Harmony — a distributed approx
 - [Manual Launch](#manual-launch)
 - [Automated Launch via start_services.py](#automated-launch-via-start_servicespy)
 - [Monitoring and Logs](#monitoring-and-logs)
-- [Running Experiments](#running-experiments)
 - [Supported Datasets](#supported-datasets)
 - [Troubleshooting](#troubleshooting)
 
@@ -52,7 +51,7 @@ Client sends base vectors to master over TCP. Master accumulates vectors, calls 
 
 ### Required on all nodes
 
-- Intel oneAPI (MPI + MKL): `/opt/intel/oneapi/setvars.sh`
+- Intel oneAPI (MPI + MKL): `/opt/intel/oneapi/setvars.sh` or `~/intel/oneapi/setvars.sh`
 - GCC 13.2: `~/gcc-13.2/`
 - FAISS (built as part of Harmony)
 - CMake 3.20+
@@ -85,7 +84,9 @@ git clone https://github.com/claire082915/HarmonyClient ~/Harmony
 cd ~/Harmony
 
 # Source oneAPI environment
-source /opt/intel/oneapi/setvars.sh --force
+source /opt/intel/oneapi/setvars.sh --force 
+or
+source ~/intel/oneapi/setvars.sh
 
 # Build
 cmake -B release -DCMAKE_BUILD_TYPE=Release
@@ -314,19 +315,6 @@ python start_services.py --config config.yaml --restart
 python start_services.py --config config.yaml --status
 ```
 
-### Override config values without editing the file
-
-```bash
-# Change nprobe for a single run
-python start_services.py --config config.yaml --start \
-  --set experiment.nprobe=200
-
-# Change number of vectors
-python start_services.py --config config.yaml --start \
-  --set client.nb=50000000 \
-  --set serve.nb=50000000
-```
-
 ---
 
 ## Monitoring and Logs
@@ -369,66 +357,6 @@ python start_services.py --config config.yaml \
 ```
 
 Downloaded logs are saved to `<local_logs_dir>/<dataset>_<nworkers>w_<timestamp>/` and an experiment record is appended to `experiments.txt` for later reference.
-
----
-
-## Running Experiments
-
-The four scaling experiments insert increasing numbers of vectors with increasing worker counts.
-
-### Experiment 1 — 1 worker, 50M vectors
-
-```yaml
-# config.yaml
-cluster:
-  num_workers: 1
-serve:
-  nb: 50000000
-client:
-  nb: 50000000
-  groundtruth_file: "/data/csl12/Harmony/benchmarks/sift1b/origin/gnd/idx_50M.ivecs"
-nodes:
-  - {name: horizann-1, ip: 127.0.0.1, private_ip: 127.0.0.1, type: master, slots: 1}
-  - {name: horizann-2, ip: 127.0.0.1, private_ip: 127.0.0.1, type: worker, slots: 1}
-```
-
-### Experiment 2 — 2 workers, 100M vectors
-
-Add a second worker node and update nb:
-```yaml
-cluster:
-  num_workers: 2
-serve:
-  nb: 100000000
-client:
-  nb: 100000000
-nodes:
-  - {name: horizann-1, ..., type: master, slots: 1}
-  - {name: horizann-2, ..., type: worker, slots: 1}
-  - {name: horizann-3, ..., type: worker, slots: 1}
-```
-
-### Experiment 3 — 3 workers, 150M vectors
-
-```yaml
-cluster:
-  num_workers: 3
-serve:
-  nb: 150000000
-client:
-  nb: 150000000
-```
-
-### Experiment 4 — 4 workers, 200M vectors
-
-```yaml
-cluster:
-  num_workers: 4
-serve:
-  nb: 200000000
-client:
-  nb: 200000000
-```
 
 ---
 
