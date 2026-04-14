@@ -6,8 +6,8 @@
 #   export AZURE_SUBSCRIPTION_ID="<your-subscription-id>"
 
 azure:
-  username: azureuser
-  ssh_private_key: ~/.ssh/azure-key.pem
+  username: csl12 #azureuser
+  ssh_private_key: ~/.ssh/id_rsa #~/.ssh/azure-key.pem
 
 resource_group:
   name: HORIZANN-RG
@@ -19,35 +19,41 @@ cluster:
 
 # Harmony dataset / index settings — passed to `query` (server) and `harmony_client`
 experiment:
-  benchmarks_path: ~/Harmony/benchmarks
-  dataset: bigann
-  group: 2
-  team: 2
-  block: 4
+  benchmarks_path: /data/csl12/Harmony/benchmarks
+  dataset: spacev1b
+  input_format: bvecs
+  group: 1
+  team: 1
+  block: 1
   nprobe: 100
+  nlist: 1000
   mode: group                         # group | flat | etc.
-  cache: true                         # pass --cache flag to load index from disk
+  cache: false                         # pass --cache flag to load index from disk
   skip_insert: false                   # pass --skip_insert (requires --cache)
   k: 100
-  query_batch: 2000                    
+  query_batch: 5000                   
   query_loop: 1                       # repeat query phase N times
 
 serve:
-  nb: 100000000
+  nb: 1000000
   dim: 128
-  train_data: ~/Harmony/benchmarks/sift1m/origin/sift1m_base.fvecs
+  train_data: /data/anns_data/SPTAG/datasets/SPACEV1B/vectors.bin
 
 # Client binary settings
 client:
-  query_file: "~/data/sift1b/bigann_query.bvecs"         # overrides experiment.benchmarks_path/dataset path if set
-  base_file: "~/data/sift1b/bigann_base.bvecs"          # only needed when skip_insert: false
-  groundtruth_file: "~/data/sift1b/gnd/idx_100M.ivecs"   # overrides default groundtruth path if set
+  base_file: "/data/anns_data/SPTAG/datasets/SPACEV1B/vectors.bin"         # overrides experiment.benchmarks_path/dataset path if set
+  query_file: "/data/anns_data/SPTAG/datasets/SPACEV1B/query.bin"          # only needed when skip_insert: false
+  groundtruth_file: "/data/anns_data/SPTAG/datasets/SPACEV1B/truth.bin"   # overrides default groundtruth path if set
   nq: 0                  # 0 = all queries
-  nb: 100000000
+  nb: 1000000
+  insert_batch: 100000
+  csv_path: "~/Harmony/benchmarks/spacev1b/result/log_serve.csv"
 
 # MPI launcher settings (used on master+worker nodes)
 mpi:
   hosts_file: ~/mpi_hosts             # written by start_services.py from discovered IPs
+  omp_num_threads: 1
+  mpirun_bin: /home/csl12/intel/oneapi/mpi/2021.14/bin/mpirun
   # Total mpirun -n = 1 (master rank 0) + num_workers
   # Each line in hosts_file: <ip> slots=1
 
@@ -56,26 +62,74 @@ repo_branch: main
 install_dir: ~/Harmony
 
 # oneAPI / MKL environment — sourced before cmake and mpirun
-oneapi_setvars: /opt/intel/oneapi/setvars.sh
+oneapi_setvars: ~/intel/oneapi/setvars.sh #/opt/intel/oneapi/setvars.sh
 
 # GCC-13 install prefix (set in CMakeLists; must exist on every node)
 gcc_prefix: ~/gcc-13.2
 
-local_logs_dir: ~/harmony_logs       # local dir for --download-logs
+local_logs_dir: ~/Harmony/harmony_logs       # local dir for --download-logs
 
 nodes:
   - name: horizann-client
-    ip: 52.230.187.166
-    private_ip: 10.0.0.5
+    ip: 127.0.0.1 # 52.230.187.166
+    private_ip: 127.0.0.1 # 10.0.0.5
     type: client
   - name: horizann-1
-    ip: 135.119.46.13
-    private_ip: 10.0.0.10
+    ip: 127.0.0.1 #135.119.46.13
+    private_ip: 127.0.0.1 #10.0.0.10
     type: master
+    slots: 1
   - name: horizann-2
-    ip: 20.12.216.94
-    private_ip: 10.0.0.11
+    ip: 127.0.0.1 #20.12.216.94
+    private_ip: 127.0.0.1 #10.0.0.11
     type: worker
+    slots: 1
+  # - name: horizann-3
+  #   ip: 20.12.219.105
+  #   private_ip: 10.0.0.12
+  #   type: master
+  #   slots: 48
+  # - name: horizann-4
+  #   ip: 20.29.78.0
+  #   private_ip: 10.0.0.13
+  #   type: worker
+  #   slots: 48
+  # - name: horizann-5
+  #   ip: 52.242.195.164
+  #   private_ip: 10.0.0.14
+  #   type: worker
+  # - name: horizann-6
+  #   ip: 52.230.187.165
+  #   private_ip: 10.0.0.15
+  #   type: worker
+  # - name: horizann-7
+  #   ip: 40.78.188.156
+  #   private_ip: 10.0.0.25
+  #   type: worker
+  # - name: horizann-8
+  #   ip: 132.196.65.49
+  #   private_ip: 10.0.0.27
+  #   type: worker
+  # - name: horizann-9
+  #   ip: 20.29.85.243
+  #   private_ip: 10.0.0.29
+  #   type: worker
+  # - name: horizann-10
+  #   ip: 20.12.201.231
+  #   private_ip: 10.0.0.16
+  #   type: worker
+  # - name: horizann-11
+  #   ip: 172.173.121.227
+  #   private_ip: 10.0.0.17
+  #   type: worker
+  # - name: horizann-12
+  #   ip: 135.119.45.136
+  #   private_ip: 10.0.0.18
+  #   type: worker
+  # - name: horizann-13
+  #   ip: 52.165.255.177
+  #   private_ip: 10.0.0.19
+  #   type: worker
 
 # VM provisioning (reference only — not used by build/start scripts)
 provisioning:

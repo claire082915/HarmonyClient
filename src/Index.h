@@ -15,7 +15,7 @@ class Index {
     Index(size_t d = 0,
           size_t nlist = 0,
           size_t nprobe = 0,
-          MetricType metric = MetricType::METRIC_L2,
+          MetricType metric = MetricType::METRIC_IP,
           OptLevel opt_level = OptLevel::OPT_NONE,
           size_t sub_k = 0,
           size_t sub_nlist = 1,

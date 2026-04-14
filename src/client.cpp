@@ -71,6 +71,9 @@
 #include <vector>
 #include <cerrno>
 #include <csignal>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
 // Opcodes — must match query.cpp
@@ -82,6 +85,9 @@ static constexpr uint8_t OP_QUERY      = 0x03;
 
 static constexpr uint8_t STATUS_OK    = 0x00;
 static constexpr uint8_t STATUS_ERROR = 0x01;
+static constexpr uint8_t METRIC_L2 = 0;
+static constexpr uint8_t METRIC_IP = 1;
+
 
 // ---------------------------------------------------------------------------
 // TCP helpers
@@ -140,26 +146,94 @@ load_fvecs(const std::string& path, size_t max_vecs = 0) {
 // ---------------------------------------------------------------------------
 static std::tuple<std::vector<float>, size_t, size_t>
 load_bvecs(const std::string& path, size_t max_vecs = 0) {
+
     std::ifstream f(path, std::ios::binary);
-    if (!f.is_open()) throw std::runtime_error("Cannot open: " + path);
+    if (!f.is_open())
+        throw std::runtime_error("Cannot open: " + path);
+
     std::vector<float> data;
     size_t nv = 0, d = 0;
-    while (f) {
+
+    while (true) {
         int32_t dim = 0;
-        if (!f.read(reinterpret_cast<char*>(&dim), sizeof(int32_t))) break;
-        if (d == 0) d = static_cast<size_t>(dim);
-        if (static_cast<size_t>(dim) != d) throw std::runtime_error("Inconsistent dim in " + path);
+
+        // MUST fully read header
+        if (!f.read(reinterpret_cast<char*>(&dim), sizeof(int32_t))) {
+            break; // clean EOF
+        }
+
+        if (dim <= 0 || dim > 1000000)
+            throw std::runtime_error("Corrupt dim detected: " + std::to_string(dim));
+
+        if (d == 0)
+            d = static_cast<size_t>(dim);
+        else if (static_cast<size_t>(dim) != d)
+            throw std::runtime_error("Inconsistent dim at vector " + std::to_string(nv));
+
         std::vector<uint8_t> buf(d);
-        f.read(reinterpret_cast<char*>(buf.data()), d);
-        if (!f) break;
-        data.resize(data.size() + d);
+
+        // CRITICAL: enforce full read
+        if (!f.read(reinterpret_cast<char*>(buf.data()), d)) {
+            throw std::runtime_error("Truncated vector at index " + std::to_string(nv));
+        }
+
         for (size_t i = 0; i < d; ++i)
-            data[nv * d + i] = static_cast<float>(buf[i]);
+            data.push_back(static_cast<float>(buf[i]));
+
         ++nv;
-        if (max_vecs > 0 && nv >= max_vecs) break;
+
+        if (max_vecs > 0 && nv >= max_vecs)
+            break;
     }
+
     return {std::move(data), nv, d};
 }
+
+static void validate_bvecs(const std::string& path, size_t max_check = 100000) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open())
+        throw std::runtime_error("Cannot open file");
+
+    size_t nv = 0;
+    size_t d = 0;
+
+    while (nv < max_check) {
+        int32_t dim = 0;
+
+        // read header
+        f.read(reinterpret_cast<char*>(&dim), sizeof(int32_t));
+        if (!f) break;
+
+        if (nv == 0) {
+            d = static_cast<size_t>(dim);
+            std::cout << "[VALIDATOR] detected dim = " << d << "\n";
+        }
+
+        if (dim <= 0 || dim > 10000) {
+            std::cerr << "[VALIDATOR] BAD DIM at " << nv << ": " << dim << "\n";
+            throw std::runtime_error("Corrupt bvecs header");
+        }
+
+        if (static_cast<size_t>(dim) != d) {
+            std::cerr << "[VALIDATOR] DIM MISMATCH at " << nv
+                      << " expected=" << d
+                      << " got=" << dim << "\n";
+            throw std::runtime_error("Inconsistent dim in file");
+        }
+
+        // skip vector
+        f.seekg(d, std::ios::cur);
+        if (!f) {
+            std::cerr << "[VALIDATOR] EOF or corruption at vector " << nv << "\n";
+            break;
+        }
+
+        nv++;
+    }
+
+    std::cout << "[VALIDATOR] OK — checked " << nv << " vectors\n";
+}
+
 
 // ---------------------------------------------------------------------------
 // Load ivecs — returns (data, nVecs, dim)
@@ -187,6 +261,103 @@ load_ivecs(const std::string& path, size_t max_vecs = 0) {
 }
 
 // ---------------------------------------------------------------------------
+// Load SPACEV sharded .bin — int8, header only in first shard
+// [int32 total_count][int32 dim] then raw int8 data across all shards
+// ---------------------------------------------------------------------------
+static std::tuple<std::vector<float>, size_t, size_t>
+load_spacev(const std::string& dir_path, size_t max_vecs = 0) {
+    namespace fs = std::filesystem;
+
+    // Collect shard files sorted numerically: vectors_1.bin, vectors_2.bin, ...
+    std::vector<fs::path> shards;
+    for (auto& entry : fs::directory_iterator(dir_path))
+        if (entry.path().filename().string().find("vectors_") == 0)
+            shards.push_back(entry.path());
+    std::sort(shards.begin(), shards.end(), [](const fs::path& a, const fs::path& b) {
+        // Extract trailing number for correct sort order
+        auto num = [](const fs::path& p) {
+            std::string s = p.stem().string();
+            auto pos = s.rfind('_');
+            return pos != std::string::npos ? std::stoul(s.substr(pos + 1)) : 0ul;
+        };
+        return num(a) < num(b);
+    });
+
+    if (shards.empty())
+        throw std::runtime_error("No shard files found in: " + dir_path);
+
+    size_t total_vecs = 0, d = 0;
+    std::vector<float> data;
+
+    for (size_t si = 0; si < shards.size(); ++si) {
+        std::ifstream f(shards[si], std::ios::binary);
+        if (!f.is_open())
+            throw std::runtime_error("Cannot open: " + shards[si].string());
+
+        size_t shard_count = 0;
+
+        if (si == 0) {
+            // First shard: read header
+            int32_t n32 = 0, d32 = 0;
+            f.read(reinterpret_cast<char*>(&n32), sizeof(int32_t));
+            f.read(reinterpret_cast<char*>(&d32), sizeof(int32_t));
+            total_vecs = static_cast<size_t>(n32);
+            d          = static_cast<size_t>(d32);
+            if (max_vecs > 0) total_vecs = std::min(total_vecs, max_vecs);
+            data.reserve(total_vecs * d);
+        }
+
+        // Read int8 vectors and convert to float
+        std::vector<int8_t> buf(d);
+        while (true) {
+            f.read(reinterpret_cast<char*>(buf.data()), d);
+            if (!f || f.gcount() < static_cast<std::streamsize>(d)) break;
+            for (size_t i = 0; i < d; ++i)
+                data.push_back(static_cast<float>(buf[i]));
+            ++shard_count;
+            if (max_vecs > 0 && data.size() / d >= max_vecs) goto done;
+        }
+    }
+done:
+    size_t nv = data.size() / d;
+    return {std::move(data), nv, d};
+}
+
+// ---------------------------------------------------------------------------
+// Load SPACEV query or truth (single file, same header)
+// ---------------------------------------------------------------------------
+static std::tuple<std::vector<float>, size_t, size_t>
+load_spacev_single(const std::string& path, size_t max_vecs = 0) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open())
+        throw std::runtime_error("Cannot open: " + path);
+
+    int32_t n32 = 0, d32 = 0;
+    f.read(reinterpret_cast<char*>(&n32), sizeof(int32_t));
+    f.read(reinterpret_cast<char*>(&d32), sizeof(int32_t));
+
+    size_t n = static_cast<size_t>(n32);
+    size_t d = static_cast<size_t>(d32);
+
+    if (max_vecs > 0)
+        n = std::min(n, max_vecs);
+
+    std::vector<int8_t> buf(n * d);
+
+    f.read(reinterpret_cast<char*>(buf.data()), n * d);
+
+    if (!f)
+        throw std::runtime_error("Failed to read SPACEV1B payload");
+
+    std::vector<float> data(n * d);
+    for (size_t i = 0; i < n * d; i++)
+        data[i] = static_cast<float>(buf[i]);
+
+    return {std::move(data), n, d};
+}
+
+
+// ---------------------------------------------------------------------------
 // Load groundtruth from either .ivecs or .bin format.
 //
 // .ivecs format: standard vecs format with int32 entries.
@@ -199,12 +370,18 @@ load_ivecs(const std::string& path, size_t max_vecs = 0) {
 // with the server response.
 // ---------------------------------------------------------------------------
 static std::tuple<std::vector<int64_t>, size_t, size_t>
+load_spacev_groundtruth(const std::string& path, size_t nq, size_t k);
+static std::tuple<std::vector<int64_t>, size_t, size_t>
 load_groundtruth(const std::string& path, size_t nq, size_t k) {
     // Determine format from file extension
     auto ext_pos = path.rfind('.');
     std::string ext = (ext_pos != std::string::npos) ? path.substr(ext_pos) : "";
 
     std::vector<int64_t> labels;
+
+    std::string filename = path.substr(path.rfind('/') + 1);
+    if (filename == "truth.bin")
+        return load_spacev_groundtruth(path, nq, k);
 
     if (ext == ".ivecs") {
         auto [data, nv, dim] = load_ivecs(path, nq);
@@ -226,6 +403,40 @@ load_groundtruth(const std::string& path, size_t nq, size_t k) {
     f.read(reinterpret_cast<char*>(labels.data()), nq * k * sizeof(int64_t));
     if (!f)
         throw std::runtime_error("Failed to read groundtruth labels from: " + path);
+
+    return {std::move(labels), nq, k};
+}
+
+// ---------------------------------------------------------------------------
+// Load SPACEV truth.bin
+// [int32 count][int32 topk][count*topk int32 ids][count*topk float distances]
+// Returns int64 labels (converted from int32) for compatibility
+// ---------------------------------------------------------------------------
+static std::tuple<std::vector<int64_t>, size_t, size_t>
+load_spacev_groundtruth(const std::string& path, size_t nq, size_t k) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) throw std::runtime_error("Cannot open groundtruth: " + path);
+
+    int32_t count32 = 0, topk32 = 0;
+    f.read(reinterpret_cast<char*>(&count32), sizeof(int32_t));
+    f.read(reinterpret_cast<char*>(&topk32),  sizeof(int32_t));
+
+    size_t count = static_cast<size_t>(count32);
+    size_t topk  = static_cast<size_t>(topk32);
+
+    if (nq > count) nq = count;
+    if (k  > topk)
+        throw std::runtime_error(std::format(
+            "Requested k={} exceeds groundtruth topk={}", k, topk));
+
+    // Read int32 IDs and convert to int64
+    std::vector<int32_t> ids32(count * topk);
+    f.read(reinterpret_cast<char*>(ids32.data()), count * topk * sizeof(int32_t));
+
+    std::vector<int64_t> labels(nq * k);
+    for (size_t i = 0; i < nq; ++i)
+        for (size_t j = 0; j < k; ++j)
+            labels[i * k + j] = static_cast<int64_t>(ids32[i * topk + j]);
 
     return {std::move(labels), nq, k};
 }
@@ -320,6 +531,13 @@ int main(int argc, char** argv) {
         .help("blockCount used by server (query_batch must be divisible by group*block)")
         .default_value(1ul)
         .action([](const std::string& s) -> size_t { return std::stoul(s); });
+    prog.add_argument("--validate_only")
+        .default_value(false)
+        .implicit_value(true);
+    prog.add_argument("--metric")
+        .help("Distance metric: l2 or ip")
+        .default_value(std::string("l2"));
+
 
     try { prog.parse_args(argc, argv); }
     catch (const std::runtime_error& err) { std::cerr << err.what() << "\n" << prog; return 1; }
@@ -336,6 +554,17 @@ int main(int argc, char** argv) {
     size_t group_count         = prog.get<size_t>("--group");
     size_t block_count         = prog.get<size_t>("--block");
     bool   skip_build          = prog.get<bool>("--skip_build");
+    bool validate_only = prog.get<bool>("--validate_only");
+    std::string metric = prog.get<std::string>("--metric");
+
+    if (validate_only) {
+        std::cout << "[Client] Running bvecs validation only...\n";
+        validate_bvecs(base_path);
+        std::cout << "[Client] Validation complete.\n";
+        return 0;
+    }
+
+
 
     // query_batch must be divisible by (group * block) for DIVIDE_GROUP mode.
     // Round down silently so users don't have to compute this themselves.
@@ -407,9 +636,17 @@ int main(int argc, char** argv) {
     // ------------------------------------------------------------------
     if (do_insert) {
         std::cout << std::format("[Client] Loading base vectors from {}...\n", base_path);
-        auto [base_data, total_nb, d] = base_path.ends_with(".bvecs") 
-            ? load_bvecs(base_path, max_nb) 
-            : load_fvecs(base_path, max_nb);
+        auto [base_data, total_nb, d] = [&]() -> std::tuple<std::vector<float>, size_t, size_t> {
+            if (fs::is_directory(base_path))
+                return load_spacev(base_path, max_nb);
+            else if (base_path.ends_with(".bvecs")) {
+                validate_bvecs(base_path);
+                return load_bvecs(base_path, max_nb);
+            }
+                
+            else
+                return load_fvecs(base_path, max_nb);
+        }();
         std::cout << std::format("[Client] Loaded {} base vectors (d={})\n", total_nb, d);
 
         auto t_insert_start = std::chrono::high_resolution_clock::now();
@@ -506,9 +743,14 @@ int main(int argc, char** argv) {
     // ------------------------------------------------------------------
     if (do_query) {
         std::cout << std::format("[Client] Loading query vectors from {}...\n", query_path);
-        auto [query_data, total_nq, d] = query_path.ends_with(".bvecs")
-            ? load_bvecs(query_path, max_nq)
-            : load_fvecs(query_path, max_nq);
+        auto [query_data, total_nq, d] = [&]() -> std::tuple<std::vector<float>, size_t, size_t> {
+            if (query_path.ends_with(".bin"))
+                return load_spacev_single(query_path, max_nq);
+            else if (query_path.ends_with(".bvecs"))
+                return load_bvecs(query_path, max_nq);
+            else
+                return load_fvecs(query_path, max_nq);
+        }();
         std::cout << std::format("[Client] Loaded {} query vectors (d={})\n", total_nq, d);
 
         // Load groundtruth if provided
@@ -556,8 +798,14 @@ int main(int argc, char** argv) {
 
                 // MasterTcpServer always reads [uint64 nq][uint64 k] with no
                 // opcode prefix — opcodes are only used in the INSERT phase.
-                uint64_t hdr[2] = {static_cast<uint64_t>(this_batch),
-                                   static_cast<uint64_t>(k)};
+                uint8_t metric_id = (metric == "ip") ? METRIC_IP : METRIC_L2;
+
+                uint64_t hdr[3] = {
+                    this_batch,
+                    k,
+                    metric_id
+                };
+
                 send_all(sock, hdr, sizeof(hdr));
                 send_all(sock, ptr, this_batch * d * sizeof(float));
 

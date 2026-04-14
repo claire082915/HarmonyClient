@@ -493,7 +493,72 @@ int main(int argc, char* argv[]) {
 
             size_t seed_nb, seed_d;
             std::unique_ptr<float[]> seed_data;
-            std::tie(seed_data, seed_nb, seed_d) = loadXvecs(seed_path);
+
+            if (seed_path.ends_with(".bin")) {
+                // Check if it's a directory of shards (SPACEV base) or single file (query)
+                if (std::filesystem::is_directory(seed_path)) {
+                    // Collect shards sorted numerically: vectors_1.bin, vectors_2.bin, ...
+                    std::vector<std::filesystem::path> shards;
+                    for (auto& entry : std::filesystem::directory_iterator(seed_path))
+                        if (entry.path().filename().string().find("vectors_") == 0)
+                            shards.push_back(entry.path());
+                    std::sort(shards.begin(), shards.end(), [](const auto& a, const auto& b) {
+                        auto num = [](const std::filesystem::path& p) {
+                            std::string s = p.stem().string();
+                            auto pos = s.rfind('_');
+                            return pos != std::string::npos ? std::stoul(s.substr(pos + 1)) : 0ul;
+                        };
+                        return num(a) < num(b);
+                    });
+                    if (shards.empty()) {
+                        cerr << std::format("[Master] No shard files found in: {}\n", seed_path);
+                        MPI_Finalize(); return 1;
+                    }
+                    // Read header from first shard
+                    std::ifstream sf0(shards[0], std::ios::binary);
+                    int32_t s_n32 = 0, s_d32 = 0;
+                    sf0.read(reinterpret_cast<char*>(&s_n32), sizeof(int32_t));
+                    sf0.read(reinterpret_cast<char*>(&s_d32), sizeof(int32_t));
+                    seed_nb = static_cast<size_t>(s_n32);
+                    seed_d  = static_cast<size_t>(s_d32);
+                    // Cap to a reasonable training size — no need to load all 1B vectors
+                    size_t train_cap = std::min(seed_nb, (size_t)500000);
+                    seed_data = std::make_unique<float[]>(train_cap * seed_d);
+                    size_t loaded = 0;
+                    for (size_t si = 0; si < shards.size() && loaded < train_cap; ++si) {
+                        std::ifstream sf(shards[si], std::ios::binary);
+                        if (si == 0) sf.seekg(8, std::ios::beg);  // skip header on first shard
+                        std::vector<int8_t> buf(seed_d);
+                        while (loaded < train_cap) {
+                            sf.read(reinterpret_cast<char*>(buf.data()), seed_d);
+                            if (!sf || sf.gcount() < static_cast<std::streamsize>(seed_d)) break;
+                            for (size_t i = 0; i < seed_d; ++i)
+                                seed_data[loaded * seed_d + i] = static_cast<float>(buf[i]);
+                            ++loaded;
+                        }
+                    }
+                    seed_nb = loaded;
+                    cerr << std::format("[Master] Loaded {} seed vectors (d={}) from sharded base\n",
+                                        seed_nb, seed_d);
+                } else {
+                    // Single .bin file (e.g. query.bin)
+                    std::ifstream sf(seed_path, std::ios::binary);
+                    if (!sf.is_open()) {
+                        cerr << std::format("[Master] Cannot open seed file: {}\n", seed_path);
+                        MPI_Finalize(); return 1;
+                    }
+                    int32_t s_n32 = 0, s_d32 = 0;
+                    sf.read(reinterpret_cast<char*>(&s_n32), sizeof(int32_t));
+                    sf.read(reinterpret_cast<char*>(&s_d32), sizeof(int32_t));
+                    seed_nb = static_cast<size_t>(s_n32);
+                    seed_d  = static_cast<size_t>(s_d32);
+                    std::vector<int8_t> i8buf(seed_nb * seed_d);
+                    sf.read(reinterpret_cast<char*>(i8buf.data()), seed_nb * seed_d);
+                    seed_data = std::make_unique<float[]>(seed_nb * seed_d);
+                    for (size_t i = 0; i < seed_nb * seed_d; ++i)
+                        seed_data[i] = static_cast<float>(i8buf[i]);
+                }
+            }
             d = seed_d;
 
             if (nlist == 0) nlist = static_cast<size_t>(std::sqrt(seed_nb));
@@ -602,6 +667,7 @@ int main(int argc, char* argv[]) {
 
                 // OP_BUILD_DONE --------------------------------------------
                 else if (op == OP_BUILD_DONE) {
+                    // cout << "[DEBUG] BUILD_DONE HIT (rank=" << rank << ")\n";
                     cout << std::format("[Master] OP_BUILD_DONE: calling index.add() on {} vectors...\n",
                                         total_inserted);
                     {
@@ -609,6 +675,8 @@ int main(int argc, char* argv[]) {
                         index.add(total_inserted, all_vectors.data());
                         cout << std::format("[Master] index.add() done in {:.3f}s\n", sw.elapsedSeconds());
                         // Save index to disk for future --cache --skip_insert runs
+                        // cout << "[DEBUG] ENTERED BUILD_DONE BLOCK\n";
+                        // cout << "[DEBUG] about to save index\n";
                         cout << std::format("[Master] Saving index to {}...\n", index_path);
                         index.save_index(index_path);
                         cout << std::format("[Master] Index saved.\n");

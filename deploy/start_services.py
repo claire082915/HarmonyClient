@@ -37,6 +37,10 @@ import subprocess
 import sys
 import threading
 import time
+import copy
+import json
+import shlex
+import subprocess
 from typing import Dict, List, Optional, Tuple
 
 import yaml
@@ -151,9 +155,14 @@ def write_mpi_hostfile(master_server: str, nodes: List[Dict], config: Dict) -> s
         [n for n in nodes if n["type"] == "worker"],
         key=lambda x: numeric_name_key(x["name"]),
     )
+    # for n in master_nodes + worker_nodes:
+    #     slots = n.get("slots", 1)  # ← read from config, default 1
+    #     lines.append(f"{n['private_ip']} slots={slots}")
+
     for n in master_nodes + worker_nodes:
-        slots = n.get("slots", 1)  # ← read from config, default 1
-        lines.append(f"{n['private_ip']} slots={slots}")
+        slots = n.get("slots", 1)
+        for _ in range(slots):
+            lines.append(f"{n['private_ip']}")
 
     content = "\n".join(lines) + "\n"
     cmd = f"cat > {hosts_path} << 'HOSTSEOF'\n{content}HOSTSEOF"
@@ -177,31 +186,38 @@ def build_server_command(config: Dict, num_ranks: int, hosts_path: str) -> str:
     install_dir = _install_dir(config)
     exp = config.get("experiment", {})
     benchmarks_path = exp.get("benchmarks_path", f"{install_dir}/benchmarks")
-    dataset       = exp.get("dataset", "sift1m")
-    group         = exp.get("group", 2)
-    team          = exp.get("team", 2)
-    block         = exp.get("block", 4)
-    nprobe        = exp.get("nprobe", 100)
-    mode          = exp.get("mode", "group")
-    tcp_port      = config.get("cluster", {}).get("tcp_port", 7777)
-    cache         = exp.get("cache", True)
-    skip_insert   = exp.get("skip_insert", True)
-    nb  = config.get("serve", {}).get("nb", 0)
-    dim = config.get("serve", {}).get("dim", 0)
-    train_data = config.get("serve", {}).get("train_data", "")
+    dataset      = exp.get("dataset", "sift1m")
+    input_format = exp.get("input_format", "fvecs")
+    group        = exp.get("group", 1)
+    team         = exp.get("team", 1)
+    block        = exp.get("block", 1)
+    nprobe       = exp.get("nprobe", 100)
+    nlist        = exp.get("nlist", 0)
+    mode         = exp.get("mode", "group")
+    tcp_port     = config.get("cluster", {}).get("tcp_port", 7777)
+    cache        = exp.get("cache", False)
+    skip_insert  = exp.get("skip_insert", False)
+    train_data   = config.get("serve", {}).get("train_data", "")
+    omp_threads  = config.get("mpi", {}).get("omp_num_threads", 1)
+    mkl_lib      = "/home/csl12/intel/oneapi/mkl/2025.0/lib"
+    serve = config.get("serve", {})
+    nb    = serve.get("nb", 0)
+    dim   = serve.get("dim", 128)
 
     flags = (
         f"--benchmarks_path {benchmarks_path} "
         f"--dataset {dataset} "
+        f"--input_format {input_format} "
         f"--serve "
         f"--tcp_port {tcp_port} "
-        f"--nprobes {nprobe} "
+        f"--nprobe {nprobe} "
+        f"--nlist {nlist} "
         f"--group {group} "
         f"--team {team} "
         f"--block {block} "
         f"--mode {mode} "
-        f"--nb {nb} "
-        f"--dim {dim}"
+        f"--nb {nb} "    
+        f"--dim {dim}" 
     )
     if train_data:
         flags += f" --train_data {train_data}"
@@ -210,14 +226,90 @@ def build_server_command(config: Dict, num_ranks: int, hosts_path: str) -> str:
     if skip_insert:
         flags += " --skip_insert"
 
-    # -x passes environment variables through MPI
-    mpirun = (
-        f"mpirun -n {num_ranks} "
-        f"--hostfile {hosts_path} "
-        f"-x PATH -x LD_LIBRARY_PATH -x OMP_NUM_THREADS "
-        f"{install_dir}/release/bin/query {flags}"
+    current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+    mkl_lib = "/home/csl12/intel/oneapi/mkl/2025.0/lib"
+    full_ld = f"{mkl_lib}:{current_ld}" if current_ld else mkl_lib
+
+    mpirun_bin = config.get("mpi", {}).get(
+        "mpirun_bin",
+        "/home/csl12/intel/oneapi/mpi/2021.14/bin/mpirun"
     )
+
+    mpirun = (
+        f"{mpirun_bin} -n {num_ranks} "
+        f"-f {hosts_path} "
+        f"-genv LD_LIBRARY_PATH {full_ld} "
+        f"-genv OMP_NUM_THREADS {omp_threads} "
+        f"/data/csl12/Harmony/release/bin/query {flags} --metric ip"
+        # f"{install_dir}/release/bin/query {flags}"
+    )
+    log.info(f"mpirun command: {mpirun}")
     return mpirun
+    # install_dir = _install_dir(config)
+    # exp = config.get("experiment", {})
+    # benchmarks_path = exp.get("benchmarks_path", f"{install_dir}/benchmarks")
+    # dataset       = exp.get("dataset", "sift1m")
+    # group         = exp.get("group", 2)
+    # team          = exp.get("team", 2)
+    # block         = exp.get("block", 4)
+    # nprobe        = exp.get("nprobe", 100)
+    # mode          = exp.get("mode", "group")
+    # tcp_port      = config.get("cluster", {}).get("tcp_port", 7777)
+    # cache         = exp.get("cache", True)
+    # skip_insert   = exp.get("skip_insert", True)
+    # nb  = config.get("serve", {}).get("nb", 0)
+    # dim = config.get("serve", {}).get("dim", 0)
+    # train_data = config.get("serve", {}).get("train_data", "")
+    # input_format = exp.get("input_format", "fvecs")
+    # nlist = exp.get("nlist", 0)
+
+    # # flags = (
+    # #     f"--benchmarks_path {benchmarks_path} "
+    # #     f"--dataset {dataset} "
+    # #     f"--serve "
+    # #     f"--tcp_port {tcp_port} "
+    # #     f"--nprobe {nprobe} "
+    # #     f"--group {group} "
+    # #     f"--team {team} "
+    # #     f"--block {block} "
+    # #     f"--mode {mode} "
+    # #     f"--nb {nb} "
+    # #     f"--dim {dim}"
+    # # )
+
+    # flags = (
+    #     f"--benchmarks_path {benchmarks_path} "
+    #     f"--dataset {dataset} "
+    #     f"--input_format {input_format} "
+    #     f"--serve "
+    #     f"--tcp_port {tcp_port} "
+    #     f"--nprobe {nprobe} " 
+    #     f"--group {group} "
+    #     f"--team {team} "
+    #     f"--block {block} "
+    #     f"--mode {mode} "
+    #     f"--nlist {nlist} "
+    # )
+
+    # if train_data:
+    #     flags += f" --train_data {train_data}"
+    # if cache:
+    #     flags += " --cache"
+    # if skip_insert:
+    #     flags += " --skip_insert"
+
+    # # -x passes environment variables through MPI
+    # oneapi = config.get("oneapi_setvars", "~/intel/oneapi/setvars.sh")
+    # omp_threads = config.get("mpi", {}).get("omp_num_threads", 1)
+
+    # mpirun = (
+    #     f"mpirun -n {num_ranks} "
+    #     f"-machinefile {hosts_path} "
+    #     f"bash -c 'source {oneapi} --force > /dev/null 2>&1 && "
+    #     f"export OMP_NUM_THREADS={omp_threads} && "
+    #     f"{install_dir}/release/bin/query {flags}'"
+    # )
+    # return mpirun
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +332,7 @@ def build_client_command(config: Dict, master_private_ip: str) -> str:
     query_loop  = exp.get("query_loop", 1)
     nq          = client.get("nq", 0)
     nb          = client.get("nb", 0)
+    insert_batch = client.get("insert_batch", 100000)
 
     # Paths — use explicit overrides if set, else derive from benchmarks_path/dataset
     query_file = client.get("query_file") or \
@@ -263,7 +356,7 @@ def build_client_command(config: Dict, master_private_ip: str) -> str:
         f"--query_loop {query_loop}"
     )
     if not skip_insert:
-        flags += f" --base {base_file}"
+        flags += f" --base {base_file} --insert_batch {insert_batch} "
     else:
         flags += " --skip_build"
     if nq > 0:
@@ -271,7 +364,8 @@ def build_client_command(config: Dict, master_private_ip: str) -> str:
     if nb > 0:
         flags += f" --nb {nb}"
 
-    return f"{install_dir}/release/bin/harmony_client {flags}"
+    # return f"{install_dir}/release/bin/harmony_client {flags}"
+    return f"/data/csl12/Harmony/release/bin/harmony_client {flags} --metric ip"
 
 
 # ---------------------------------------------------------------------------
@@ -280,10 +374,11 @@ def build_client_command(config: Dict, master_private_ip: str) -> str:
 
 def start_server(master_node: Dict, nodes: List[Dict], config: Dict, timestamp: str) -> bool:
     """Launch mpirun on the master node spanning master + all worker ranks."""
-    ssh_key   = _ssh_key(config)
+    ssh_key     = _ssh_key(config)
     install_dir = _install_dir(config)
-    username  = config["azure"]["username"]
-    server    = _server(username, master_node)
+    username    = config["azure"]["username"]
+    server      = _server(username, master_node)
+    tcp_port    = config.get("cluster", {}).get("tcp_port", 7777)
 
     if not verify_binaries(server, config):
         return False
@@ -291,18 +386,15 @@ def start_server(master_node: Dict, nodes: List[Dict], config: Dict, timestamp: 
     stop_services(server, ssh_key)
 
     num_workers = len([n for n in nodes if n["type"] == "worker"])
-    num_ranks   = 1 + num_workers   # rank 0 (master) + worker ranks
+    num_ranks   = 1 + num_workers
 
     hosts_path  = write_mpi_hostfile(server, nodes, config)
     log_path    = remote_log_path(install_dir, "server", timestamp)
     log_dir     = remote_log_dir(install_dir)
 
-    source_oneapi = _source_oneapi(config)
-    mpirun_cmd    = build_server_command(config, num_ranks, hosts_path)
+    mpirun_cmd  = build_server_command(config, num_ranks, hosts_path)
 
     launch = (
-        f"{source_oneapi} && "
-        # f"export OMP_NUM_THREADS=64 && "
         f"mkdir -p {log_dir} && "
         f"cd {install_dir} && "
         f"nohup {mpirun_cmd} > {log_path} 2>&1 &"
@@ -310,24 +402,37 @@ def start_server(master_node: Dict, nodes: List[Dict], config: Dict, timestamp: 
 
     log.info(f"[{server}] Launching mpirun ({num_ranks} ranks) …")
     log.info(f"[{server}] Server log: {log_path}")
+    # log.info(f"[{server}] Launch command: {launch}")
     _ensure_tmux(server, ssh_key)
     _tmux_run(server, launch, ssh_key)
 
-    # Give the server a moment to start listening
-    log.info(f"[{server}] Waiting 8 s for server to initialize…")
-    time.sleep(8)
-
-    # Verify mpirun is alive
+    # Wait until mpirun is alive
+    time.sleep(3)
     code, stdout, _ = ssh_exec(
-        server, "pgrep -f 'mpirun.*query' && echo SERVER_UP || echo SERVER_DOWN",
+        server, "pgrep -f 'bin/query' && echo SERVER_UP || echo SERVER_DOWN",
         ssh_key, timeout=15,
     )
-    if "SERVER_UP" in stdout:
-        log.info(f"[{server}] ✓ Server (mpirun) started successfully")
-        return True
-    log.error(f"[{server}] ✗ mpirun does not appear to be running — check {log_path}")
-    return False
+    if "SERVER_UP" not in stdout:
+        log.error(f"[{server}] ✗ mpirun does not appear to be running — check {log_path}")
+        return False
+    log.info(f"[{server}] ✓ mpirun started, waiting for port {tcp_port} to open...")
 
+    # Wait until the INSERT port is actually listening (training can take minutes)
+    for attempt in range(120):  # up to 10 minutes
+        time.sleep(5)
+        _, stdout, _ = ssh_exec(
+            server,
+            f"ss -tlnp | grep ':{tcp_port}' && echo PORT_OPEN || echo PORT_CLOSED",
+            ssh_key, timeout=10,
+        )
+        if "PORT_OPEN" in stdout:
+            log.info(f"[{server}] ✓ Server is listening on port {tcp_port} (after {(attempt+1)*5}s)")
+            return True
+        if attempt % 6 == 0:  # log every 30s
+            log.info(f"[{server}] Still waiting for port {tcp_port}... ({(attempt+1)*5}s elapsed)")
+
+    log.error(f"[{server}] ✗ Server never opened port {tcp_port} after 10 minutes")
+    return False
 
 # ---------------------------------------------------------------------------
 # Start client
@@ -349,6 +454,7 @@ def start_client(client_node: Dict, master_private_ip: str, config: Dict, timest
     launch = (
         f"mkdir -p {log_dir} && "
         f"cd {_install_dir(config)} && "
+        f"export LD_LIBRARY_PATH=$LD_LIBRARY_PATH && "
         f"nohup {client_cmd} > {log_path} 2>&1 &"
     )
 
@@ -445,43 +551,95 @@ def download_logs(config: Dict, output_dir: str, timestamp: str) -> None:
     """
     Download all *_<timestamp>.log files from every node into
     <output_dir>/<dataset>_<nworkers>w_<timestamp>/.
+    Also downloads CSV from client node if client.csv_path is set.
     """
     nodes    = get_cluster_nodes(config, validate_range=False)
     username = config["azure"]["username"]
-    ssh_key  = _ssh_key(config)
+    ssh_key  = os.path.expanduser(_ssh_key(config))
     install_dir = _install_dir(config)
 
     dataset   = config.get("experiment", {}).get("dataset", "harmony")
     nworkers  = len([n for n in nodes if n["type"] == "worker"])
     bundle    = f"{dataset}_{nworkers}w"
-    dest_root = os.path.expanduser(os.path.join(output_dir, f"{bundle}_{timestamp}"))
+    ts        = timestamp.replace(" ", "_")
+    dest_root = os.path.expanduser(os.path.join(output_dir, f"{bundle}_{ts}"))
     os.makedirs(dest_root, exist_ok=True)
 
-    log_dir = remote_log_dir(install_dir)
-    log.info(f"Downloading logs timestamped {timestamp} from {len(nodes)} nodes …")
+    log_dir  = remote_log_dir(install_dir)
+    ssh_opts = ["-i", ssh_key, "-oStrictHostKeyChecking=no", "-oConnectTimeout=30", "-P", "22"]
+
+    log.info(f"Downloading logs timestamped {ts} from {len(nodes)} nodes...")
     log.info(f"Local destination: {os.path.abspath(dest_root)}")
 
     for n in nodes:
         server  = _server(username, n)
-        list_cmd = f"ls -1 {log_dir}/*_{timestamp}.log 2>/dev/null || true"
+        ip      = n["ip"] or n["private_ip"]
+        name    = n["name"]
+
+        # List matching log files on remote
+        list_cmd = f"ls -1 {log_dir}/*_{ts}.log 2>/dev/null || true"
         _, stdout, _ = ssh_exec(server, list_cmd, ssh_key, timeout=20)
         paths = [p.strip() for p in stdout.splitlines() if p.strip()]
 
         if not paths:
-            log.info(f"  (no matching logs) {n['name']}")
+            log.info(f"  (no matching logs) {name}")
             continue
 
         for remote_path in paths:
             base       = os.path.basename(remote_path)
-            local_path = os.path.join(dest_root, f"{n['name']}_{base}")
-            ok = scp_download(server, remote_path, local_path, ssh_key)
-            if ok:
+            local_path = os.path.join(dest_root, base)
+            log.info(f"Downloading {name}: {remote_path} -> {local_path}")
+            result = subprocess.run(
+                ["scp"] + ssh_opts + [f"{username}@{ip}:{remote_path}", local_path],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
                 size = os.path.getsize(local_path)
-                log.info(f"  ✓ {n['name']}: {local_path}  ({size:,} bytes)")
+                log.info(f"  ✓ {name}: {local_path}  ({size:,} bytes)")
             else:
-                log.warning(f"  ✗ {n['name']}: failed to download {remote_path}")
+                log.warning(f"  ✗ {name}: failed {remote_path} - {result.stderr.strip()}")
 
-    log.info(f"\nAll logs saved to: {os.path.abspath(dest_root)}")
+    # Download CSV from client node if configured
+    remote_csv = config.get("client", {}).get("csv_path", "")
+    if remote_csv:
+        client_node = next((n for n in nodes if n["type"] == "client"), None)
+        if client_node:
+            ip     = client_node["ip"] or client_node["private_ip"]
+            name   = client_node["name"]
+            server = f"{username}@{ip}"
+            local_csv = os.path.join(dest_root, os.path.basename(remote_csv))
+            log.info(f"Downloading CSV from {name}: {remote_csv} -> {local_csv}")
+            result = subprocess.run(
+                ["scp"] + ssh_opts + [f"{server}:{remote_csv}", local_csv],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                size = os.path.getsize(local_csv)
+                log.info(f"  ✓ {name}: {local_csv}  ({size:,} bytes)")
+            else:
+                log.warning(f"  ✗ {name}: failed CSV {remote_csv} - {result.stderr.strip()}")
+        else:
+            log.warning("csv_path set but no client node found — skipping CSV download")
+
+    # Append experiment record to experiments.txt
+    local_logs_dir = os.path.expanduser(
+        config.get("local_logs_dir", "~/harmony_logs")
+    )
+    exp_file = os.path.join(local_logs_dir, "experiments.txt")
+    record = {
+        "log_timestamp": ts,
+        "experiment_bundle": bundle,
+        "summary": f"{dataset} {nworkers}w nprobe={config.get('experiment',{}).get('nprobe')} "
+                   f"group={config.get('experiment',{}).get('group')} "
+                   f"mode={config.get('experiment',{}).get('mode')}",
+        "overlay": config.get("experiment", {}),
+        "service_results": {n["name"]: True for n in nodes},
+    }
+    os.makedirs(local_logs_dir, exist_ok=True)
+    with open(exp_file, "a") as f:
+        f.write(json.dumps(record) + "\n")
+    log.info(f"Experiment record appended to {exp_file}")
+    log.info(f"All logs saved to: {os.path.abspath(dest_root)}")
 
 
 # ---------------------------------------------------------------------------
