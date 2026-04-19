@@ -765,6 +765,10 @@ void GroupWorker::receiveQuery() {
 
     MPI_Barrier(MPI_COMM_WORLD); // Corresponds to the barrier at the end of preSearch
 
+    // int nprobe = 0;
+    // MPI_Bcast(&nprobe, 1, MPI_INT, 0, MPI_COMM_WORLD);  // ← add this
+    // index->nprobe = nprobe;
+
     // Zero distance buffers from previous query — searchBlock does += so
     // stale values from the prior query corrupt results and cause hangs.
     for (size_t i = 0; i < distancesForBlocks.size(); i++) {

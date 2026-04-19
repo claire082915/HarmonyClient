@@ -70,6 +70,14 @@ static constexpr uint8_t OP_BUILD_DONE = 0x02;
 static constexpr uint8_t STATUS_OK    = 0x00;
 static constexpr uint8_t STATUS_ERROR = 0x01;
 
+struct QueryHeader {
+    uint64_t nq;
+    uint64_t k;
+    uint64_t nprobe;
+    uint64_t metric;
+};
+
+
 // ---------------------------------------------------------------------------
 // Reliable TCP helpers (INSERT phase only — MasterTcpServer has its own)
 // ---------------------------------------------------------------------------
@@ -253,7 +261,39 @@ int main(int argc, char* argv[]) {
                 // MPI_Send to each worker then ends with MPI_Barrier.
                 // Workers must call init() first (issuing matching MPI_Recvs),
                 // then hit MPI_Barrier (matching preSearch's final barrier).
-                if (searchMode == Index::SearchMode::DIVIDE_GROUP) {
+                if (searchMode == Index::SearchMode::DIVIDE_IVF) {
+                    BaseWorker worker;
+                    worker.init(rank);  // handles barrier + first query's nq/k/queries/listids/heapTops
+                    cerr << "[DEBUG worker] startIVFId=" << worker.info.startIVFId 
+                        << " ivfCount=" << worker.info.ivfCount
+                        << " nlist=" << worker.info.nlist
+                        << " nprobe=" << worker.info.nprobe << "\n"; cerr.flush();
+                    cerr << "[DEBUG worker] first listid=" << worker.listidqueries.get()[0] 
+                        << " second=" << worker.listidqueries.get()[1] << "\n"; cerr.flush();
+                    cerr << "[DEBUG worker] init done, nq=" << worker.nq << " k=" << worker.k << "\n"; cerr.flush();
+                    cerr << "[DEBUG worker] first query[0]=" << worker.querys.get()[0] << "\n"; cerr.flush();
+                    // First search uses data already received by init()
+                    worker.search(pruning);
+                    cerr << "[DEBUG worker] search done, labels[0]=" << worker.labels.get()[0] << "\n"; cerr.flush();
+
+                    // Subsequent queries
+                    while (true) {
+                        int signal = WORKER_SIGNAL_SHUTDOWN;
+                        MPI_Bcast(&signal, 1, MPI_INT, 0, MPI_COMM_WORLD);
+                        cerr << "[DEBUG worker] signal=" << signal << "\n"; cerr.flush();
+                        if (signal == WORKER_SIGNAL_SHUTDOWN) break;
+
+                        size_t nq = 0, k = 0;
+                        MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
+                        MPI_Bcast(&k,  sizeof(k),  MPI_BYTE, 0, MPI_COMM_WORLD);
+                        worker.nq = nq;
+                        worker.k  = k;
+                        MPI_Bcast(worker.querys.get(),         nq * worker.info.d,      MPI_FLOAT,   0, MPI_COMM_WORLD);
+                        MPI_Bcast(worker.listidqueries.get(),   nq * worker.info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
+                        MPI_Bcast(worker.heapTops.get(),        nq,                      MPI_FLOAT,   0, MPI_COMM_WORLD);
+                        worker.search(pruning);
+                    }
+                } else if (searchMode == Index::SearchMode::DIVIDE_GROUP) {
                     GroupWorker worker;
                     worker.init(rank, blockSend);  // MPI_Recvs match preSearch() MPI_Sends
                     MPI_Barrier(MPI_COMM_WORLD);   // matches preSearch() final MPI_Barrier
@@ -261,6 +301,12 @@ int main(int argc, char* argv[]) {
                         int signal = WORKER_SIGNAL_SHUTDOWN;
                         MPI_Bcast(&signal, 1, MPI_INT, 0, MPI_COMM_WORLD);
                         if (signal == WORKER_SIGNAL_SHUTDOWN) break;
+
+                        // int nprobe_val = 0;
+                        // MPI_Bcast(&nprobe_val, 1, MPI_INT, 0, MPI_COMM_WORLD);
+                        // MPI_Barrier(MPI_COMM_WORLD);
+
+                        // worker.runtime_nprobe = (size_t)nprobe_val;
                         worker.receiveQuery();
                         worker.search(pruning, minorCut);
                     }
@@ -272,6 +318,11 @@ int main(int argc, char* argv[]) {
                         int signal = WORKER_SIGNAL_SHUTDOWN;
                         MPI_Bcast(&signal, 1, MPI_INT, 0, MPI_COMM_WORLD);
                         if (signal == WORKER_SIGNAL_SHUTDOWN) break;
+
+                        // int nprobe_val = 0;
+                        // MPI_Bcast(&nprobe_val, 1, MPI_INT, 0, MPI_COMM_WORLD);
+                        // MPI_Barrier(MPI_COMM_WORLD);
+
                         worker.search(pruning);
                         worker.postSearch();
                     }
@@ -281,6 +332,11 @@ int main(int argc, char* argv[]) {
                         int signal = WORKER_SIGNAL_SHUTDOWN;
                         MPI_Bcast(&signal, 1, MPI_INT, 0, MPI_COMM_WORLD);
                         if (signal == WORKER_SIGNAL_SHUTDOWN) break;
+
+                        // int nprobe_val = 0;
+                        // MPI_Bcast(&nprobe_val, 1, MPI_INT, 0, MPI_COMM_WORLD);
+                        // MPI_Barrier(MPI_COMM_WORLD);
+
                         workerMain(rank, pruning, searchMode, blockSend, minorCut);
                     }
                 }
@@ -310,6 +366,11 @@ int main(int argc, char* argv[]) {
                         int signal = WORKER_SIGNAL_SHUTDOWN;
                         MPI_Bcast(&signal, 1, MPI_INT, 0, MPI_COMM_WORLD);
                         if (signal == WORKER_SIGNAL_SHUTDOWN) break;
+                        // int nprobe_val = 0;
+                        // MPI_Bcast(&nprobe_val, 1, MPI_INT, 0, MPI_COMM_WORLD);
+                        // MPI_Barrier(MPI_COMM_WORLD);
+
+                        // worker.runtime_nprobe = (size_t)nprobe_val;
                         worker.receiveQuery();
                         worker.search(pruning, minorCut);
                     }
@@ -320,6 +381,11 @@ int main(int argc, char* argv[]) {
                         int signal = WORKER_SIGNAL_SHUTDOWN;
                         MPI_Bcast(&signal, 1, MPI_INT, 0, MPI_COMM_WORLD);
                         if (signal == WORKER_SIGNAL_SHUTDOWN) break;
+
+                        // int nprobe_val = 0;
+                        // MPI_Bcast(&nprobe_val, 1, MPI_INT, 0, MPI_COMM_WORLD);
+                        // MPI_Barrier(MPI_COMM_WORLD);
+
                         worker.search(pruning);
                         worker.postSearch();
                     }
@@ -328,6 +394,10 @@ int main(int argc, char* argv[]) {
                         int signal = WORKER_SIGNAL_SHUTDOWN;
                         MPI_Bcast(&signal, 1, MPI_INT, 0, MPI_COMM_WORLD);
                         if (signal == WORKER_SIGNAL_SHUTDOWN) break;
+                        // int nprobe_val = 0;
+                        // MPI_Bcast(&nprobe_val, 1, MPI_INT, 0, MPI_COMM_WORLD);
+                        // MPI_Barrier(MPI_COMM_WORLD);
+
                         workerMain(rank, pruning, searchMode, blockSend, minorCut);
                     }
                 }
@@ -558,6 +628,9 @@ int main(int argc, char* argv[]) {
                     for (size_t i = 0; i < seed_nb * seed_d; ++i)
                         seed_data[i] = static_cast<float>(i8buf[i]);
                 }
+            }
+            else {
+                std::tie(seed_data, seed_nb, seed_d) = loadXvecs(seed_path);
             }
             d = seed_d;
 
@@ -888,6 +961,217 @@ int main(int argc, char* argv[]) {
         MPI_Finalize();
         return 0;
     }
+    //     while (true) {
+    //         std::shared_ptr<SearchJob> job;
+    //         {
+    //             std::unique_lock<std::mutex> lk(*queue_mutex);
+    //             queue_cv->wait(lk, [&] {
+    //                 return !job_queue->empty() || tcp_server.IsDone();
+    //             });
+
+    //             if (job_queue->empty()) break;  // server shut down, no more jobs
+
+    //             job = job_queue->front();
+    //             job_queue->pop();
+    //         }
+
+    //         size_t nq    = static_cast<size_t>(job->nq);
+    //         size_t job_k = static_cast<size_t>(job->k);
+    //         // size_t job_nprobe = job->nprobe; 
+
+    //         cout << std::format("[Master] MPI search: nq={} k={}\n", nq, job_k);
+
+    //         // Signal workers: SEARCH
+    //         int sig = WORKER_SIGNAL_SEARCH;
+    //         MPI_Bcast(&sig, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    //         // MPI_Barrier matches the one at the top of worker::receiveQuery()
+    //         MPI_Barrier(MPI_COMM_WORLD);
+
+    //         // Results are written directly into the job; MasterTcpServer reads them
+    //         job->distances.resize(nq * job_k);
+    //         job->labels.resize(nq * job_k);
+
+    //         std::vector<float>   best_dist;
+    //         std::vector<int64_t> best_labels;
+    //         double best_score = std::numeric_limits<double>::max();
+    //         double total_time = 0.0;
+
+    //         for (size_t np : job->nprobe_list) {
+
+    //             int sig = WORKER_SIGNAL_SEARCH;
+    //             MPI_Bcast(&sig, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    //             int nprobe_val = (int)np;
+    //             MPI_Bcast(&nprobe_val, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    //             MPI_Barrier(MPI_COMM_WORLD);
+
+    //             index.nprobe = np;
+
+    //             Stopwatch search_timer;
+    //             index.search(nq, job->vectors.data(), job_k,
+    //                         job->distances.data(), job->labels.data());
+    //             double t = search_timer.elapsedSeconds();
+    //             total_time += t;
+
+    //             double score = 0.0;
+    //             for (size_t i = 0; i < nq * job_k; i++)
+    //                 score += job->distances[i];
+
+    //             if (score < best_score) {
+    //                 best_score  = score;
+    //                 best_dist   = job->distances;
+    //                 best_labels = job->labels;
+    //             }
+
+    //             std::cout << "[Master] nprobe=" << np << " time=" << t << "\n";
+    //         }
+
+    //         double search_time = total_time;
+
+    //         job->distances = std::move(best_dist);
+    //         job->labels    = std::move(best_labels);
+
+    //         // Stopwatch search_timer;
+    //         // index.search(nq, job->vectors.data(), job_k,
+    //         //              job->distances.data(), job->labels.data());
+    //         // double search_time = search_timer.elapsedSeconds();
+
+    //         // std::vector<size_t> nprobe_list = {10, 20, 50, 100, 200};
+
+    //         // double total_time = 0.0;
+
+    //         // // optional: store last result OR best result
+    //         // std::vector<float> best_dist;
+    //         // std::vector<int64_t> best_labels;
+    //         // double best_score = std::numeric_limits<double>::max();
+
+    //         // for (size_t np : nprobe_list) {
+
+    //         //     index.nprobe = np;
+
+    //         //     Stopwatch sw;
+
+    //         //     index.search(
+    //         //         nq,
+    //         //         job->vectors.data(),
+    //         //         job_k,
+    //         //         job->distances.data(),
+    //         //         job->labels.data()
+    //         //     );
+
+    //         //     double t = sw.elapsedSeconds();
+    //         //     total_time += t;
+
+    //         //     // OPTIONAL: keep best result (e.g., lowest distance sum)
+    //         //     double score = 0.0;
+    //         //     for (size_t i = 0; i < nq * job_k; i++) {
+    //         //         score += job->distances[i];
+    //         //     }
+
+    //         //     if (score < best_score) {
+    //         //         best_score = score;
+
+    //         //         best_dist = job->distances;
+    //         //         best_labels = job->labels;
+    //         //     }
+
+    //         //     std::cout << "[Master] nprobe=" << np
+    //         //             << " time=" << t << "\n";
+    //         // }
+
+    //         // double search_time = total_time / nprobe_list.size();
+
+    //         // // overwrite job with best result (if using best selection)
+    //         // job->distances = std::move(best_dist);
+    //         // job->labels    = std::move(best_labels);
+
+
+    //         // Recall + CSV logging (identical to original serve mode)
+    //         if (std::filesystem::exists(gt_path)) {
+    //             auto gt_I = std::make_unique<idx_t[]>(job_k * nq);
+    //             auto gt_D = std::make_unique<float[]>(job_k * nq);
+    //             loadResults(gt_path, gt_I.get(), gt_D.get(), nq, job_k);
+
+    //             float recall = calculate_recall(job->labels.data(), job->distances.data(),
+    //                                             gt_I.get(), gt_D.get(), nq, job_k, metric);
+    //             float r2     = calculate_r2(job->labels.data(), job->distances.data(),
+    //                                         gt_I.get(), gt_D.get(), nq, job_k, metric);
+
+    //             Stats stats;
+    //             stats.mode       = Index::to_string(searchMode);
+    //             stats.nb         = total_inserted;
+    //             stats.nq         = nq;
+    //             stats.d          = d;
+    //             stats.k          = job_k;
+    //             stats.nlist      = nlist;
+    //             stats.nprobe     = serve_nprobe;
+    //             stats.worker     = workerCount;
+    //             stats.block      = blockCount;
+    //             stats.group      = groupCount;
+    //             stats.team       = teamCount;
+    //             stats.divideIVF          = false;
+    //             stats.disableOrderOptimize = disableOrderOptimize;
+    //             stats.blockSend          = blockSend;
+    //             stats.pruning            = pruning;
+    //             stats.opt_level          = added_opt_levels;
+    //             stats.query_time         = search_time;
+    //             stats.original_time      = 0;
+    //             stats.faiss_query_time   = 0;
+    //             stats.trainTime          = index.trainTime;
+    //             stats.addTime            = index.addTime;
+    //             stats.preSearchTime      = index.preSearchTime;
+    //             stats.recall             = recall;
+    //             stats.r2                 = r2;
+    //             stats.variance           = 0;
+    //             stats.inBalanceRatio     = 0;
+    //             stats.inBalanceRatioTeam = 0;
+    //             stats.brute_ratio        = 0;
+    //             stats.simi_ratio         = 0;
+    //             stats.print();
+
+    //             std::string log_path = std::format("{}/{}/result/log_serve.csv",
+    //                                                benchmarks_path, dataset);
+    //             stats.myToCsv(log_path, true, dataset);
+    //             cout << std::format("[Master] recall={:.4f} r2={:.4f} time={:.4f}s\n",
+    //                                  recall, r2, search_time);
+    //         } else {
+    //             cout << YELLOW
+    //                  << std::format("[Master] No groundtruth at {} — run benchmark mode first\n",
+    //                                 gt_path)
+    //                  << RESET;
+    //             cout << std::format("[Master] search time: {:.4f}s\n", search_time);
+    //         }
+
+    //         // Mark job done — MasterTcpServer::ServeLoop wakes and sends results
+    //         {
+    //             std::lock_guard<std::mutex> lk(job->mtx);
+    //             job->done = true;
+    //         }
+    //         job->cv.notify_one();
+    //     }
+
+    //     // Drain any jobs that arrived between the last dequeue and shutdown signal
+    //     {
+    //         std::lock_guard<std::mutex> lk(*queue_mutex);
+    //         while (!job_queue->empty()) {
+    //             auto j = job_queue->front();
+    //             job_queue->pop();
+    //             std::lock_guard<std::mutex> jlk(j->mtx);
+    //             j->done = true;
+    //             j->cv.notify_one();
+    //         }
+    //     }
+
+    //     // Broadcast shutdown to workers and clean up
+    //     {
+    //         int sig = WORKER_SIGNAL_SHUTDOWN;
+    //         MPI_Bcast(&sig, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    //     }
+    //     tcp_server.Shutdown();
+
+    //     MPI_Finalize();
+    //     return 0;
+    // }
 
     // =======================================================================
     // BENCHMARK MODE — original logic unchanged

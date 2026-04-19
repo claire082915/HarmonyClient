@@ -35,6 +35,10 @@ struct SearchJob {
     uint32_t nq = 0;
     uint32_t d  = 0;
     uint32_t k  = 0;
+    std::vector<size_t> nprobe_list;
+    uint64_t nprobe;
+    uint64_t metric;
+
 
     // Output (filled by MPI master, then signalled back to listener thread)
     std::vector<float>   distances;   // nq * k

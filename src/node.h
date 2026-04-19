@@ -509,6 +509,7 @@ public:
     size_t blockSize = 0;
     size_t groupSize = 0;
     size_t nq = 0, k = 0;
+    size_t runtime_nprobe = 0;
 
     std::unique_ptr<size_t[]> listSizes;         // Number of vectors in nlist clusters
     std::unique_ptr<float[]> querys;             // nq query vectors, dimension is block_dim

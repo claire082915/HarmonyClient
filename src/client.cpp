@@ -72,8 +72,17 @@
 #include <cerrno>
 #include <csignal>
 #include <filesystem>
+#include "SIFTChunkReaderFloat.h"
 
 namespace fs = std::filesystem;
+
+struct QueryHeader {
+    uint64_t nq;
+    uint64_t k;
+    uint64_t nprobe;
+    uint64_t metric;
+};
+
 
 // ---------------------------------------------------------------------------
 // Opcodes — must match query.cpp
@@ -537,6 +546,13 @@ int main(int argc, char** argv) {
     prog.add_argument("--metric")
         .help("Distance metric: l2 or ip")
         .default_value(std::string("l2"));
+    prog.add_argument("--nprobe")
+        .default_value(10ul)
+        .action([](const std::string& s) { return std::stoul(s); });
+    prog.add_argument("--nprobes")
+        .help("Comma-separated nprobe sweep list e.g. 10,20,50,100,200")
+        .default_value(std::string("100"));
+
 
 
     try { prog.parse_args(argc, argv); }
@@ -556,6 +572,18 @@ int main(int argc, char** argv) {
     bool   skip_build          = prog.get<bool>("--skip_build");
     bool validate_only = prog.get<bool>("--validate_only");
     std::string metric = prog.get<std::string>("--metric");
+    size_t nprobe = prog.get<size_t>("--nprobe");
+
+    std::string nprobes_str = prog.get<std::string>("--nprobes");
+    std::vector<size_t> nprobe_list;
+    {
+        std::stringstream ss(nprobes_str);
+        std::string token;
+        while (std::getline(ss, token, ','))
+            nprobe_list.push_back(std::stoul(token));
+    }
+
+
 
     if (validate_only) {
         std::cout << "[Client] Running bvecs validation only...\n";
@@ -648,6 +676,60 @@ int main(int argc, char** argv) {
                 return load_fvecs(base_path, max_nb);
         }();
         std::cout << std::format("[Client] Loaded {} base vectors (d={})\n", total_nb, d);
+
+        // std::cout << "[Client] Streaming base vectors...\n";
+
+        // auto t_start = std::chrono::high_resolution_clock::now();
+
+        // SIFTChunkReaderFloat reader(base_path, insert_batch, max_nb);
+
+        // if (!reader.has_next()) {
+        //     throw std::runtime_error("Empty dataset");
+        // }
+
+        // // ---- FIRST batch (must initialize dim safely)
+        // std::vector<float> batch = reader.next();
+        // size_t d = reader.get_dim();
+
+        // size_t batch_idx = 0;
+        // size_t sent_total = 0;
+
+        // auto send_batch = [&](const std::vector<float>& batch_vec) {
+        //     size_t this_batch = batch_vec.size() / d;
+        //     const float* ptr = batch_vec.data();
+
+        //     send_all(sock, &OP_INSERT, 1);
+
+        //     uint64_t n64 = this_batch;
+        //     send_all(sock, &n64, sizeof(n64));
+
+        //     send_all(sock, ptr, this_batch * d * sizeof(float));
+
+        //     uint8_t status;
+        //     recv_all(sock, &status, 1);
+
+        //     if (status != STATUS_OK)
+        //         throw std::runtime_error("INSERT failed");
+
+        //     sent_total += this_batch;
+
+        //     std::cout << "[Client] batch " << batch_idx++
+        //             << " sent " << this_batch
+        //             << " (total=" << sent_total << ")\n";
+        // };
+
+        // // first batch
+        // send_batch(batch);
+
+        // // remaining batches
+        // while (reader.has_next()) {
+        //     send_batch(reader.next());
+        // }
+        // auto t_end = std::chrono::high_resolution_clock::now();
+
+        // std::cout << "[Client] INSERT streaming done in "
+        //         << std::chrono::duration<double>(t_end - t_start).count()
+        //         << "s\n";
 
         auto t_insert_start = std::chrono::high_resolution_clock::now();
         size_t sent = 0;
@@ -742,15 +824,150 @@ int main(int argc, char** argv) {
     // QUERY phase
     // ------------------------------------------------------------------
     if (do_query) {
+    //     std::cout << std::format("[Client] Loading query vectors from {}...\n", query_path);
+    //     auto [query_data, total_nq, d] = [&]() -> std::tuple<std::vector<float>, size_t, size_t> {
+    //         if (query_path.ends_with(".bin"))
+    //             return load_spacev_single(query_path, max_nq);
+    //         else if (query_path.ends_with(".bvecs"))
+    //             return load_bvecs(query_path, max_nq);
+    //         else
+    //             return load_fvecs(query_path, max_nq);
+    //     }();
+    //     std::cout << std::format("[Client] Loaded {} query vectors (d={})\n", total_nq, d);
+
+    //     // Load groundtruth if provided
+    //     bool have_gt = !gt_path.empty();
+    //     std::vector<int64_t> gt_labels;
+    //     size_t gt_k = 0;
+
+    //     if (have_gt) {
+    //         std::cout << std::format("[Client] Loading groundtruth from {}...\n", gt_path);
+    //         try {
+    //             auto [gt, gt_nv, gt_dim] = load_groundtruth(gt_path, total_nq, k);
+    //             if (gt_nv < total_nq) {
+    //                 std::cerr << std::format("[Client] WARNING: groundtruth has {} entries but {} queries "
+    //                                          "requested — capping nq to {}.\n",
+    //                                          gt_nv, total_nq, gt_nv);
+    //                 total_nq = gt_nv;
+    //             }
+    //             gt_labels = std::move(gt);
+    //             gt_k      = gt_dim;
+    //             std::cout << std::format("[Client] Groundtruth loaded: {} vectors, top-{}\n",
+    //                                      gt_nv, gt_k);
+    //         } catch (const std::exception& e) {
+    //             std::cerr << std::format("[Client] WARNING: could not load groundtruth ({}). "
+    //                                      "Proceeding without recall.\n", e.what());
+    //             have_gt = false;
+    //         }
+    //     }
+
+    //     // std::vector<size_t> nprobe_list = {10, 20, 50, 100};
+
+    //     for (size_t loop_iter = 0; loop_iter < query_loop; ++loop_iter) {
+    //     // for (size_t np : nprobe_list) {
+    //         std::cout << std::format("[Client] --- Query loop {}/{} ---\n", loop_iter + 1, query_loop);
+    //         // std::cout << std::format("[Client] ===== nprobe={} =====\n", np);
+
+    //         size_t queried = 0;
+    //         size_t batch_idx = 0;
+    //         double total_query_time = 0.0;
+
+    //         // Accumulators for overall recall across the full loop iteration
+    //         double recall_sum    = 0.0;
+    //         size_t recall_batches = 0;
+
+    //         while (queried < total_nq) {
+    //             size_t this_batch = std::min(query_batch, total_nq - queried);
+    //             const float* ptr = query_data.data() + queried * d;
+
+    //             auto t0 = std::chrono::high_resolution_clock::now();
+
+    //             // MasterTcpServer always reads [uint64 nq][uint64 k] with no
+    //             // opcode prefix — opcodes are only used in the INSERT phase.
+    //             uint8_t metric_id = (metric == "ip") ? METRIC_IP : METRIC_L2;
+
+    //             uint64_t hdr[2] = {static_cast<uint64_t>(this_batch),
+    //                                static_cast<uint64_t>(k)};
+
+    //             // QueryHeader hdr;
+    //             // hdr.nq     = this_batch;
+    //             // hdr.k      = k;
+    //             // hdr.nprobe = np; 
+    //             // hdr.metric = (metric == "ip") ? METRIC_IP : METRIC_L2;
+
+    //             send_all(sock, &hdr, sizeof(hdr));
+    //             send_all(sock, ptr, this_batch * d * sizeof(float));
+
+    //             auto t_sent = std::chrono::high_resolution_clock::now();
+    //             double send_time = std::chrono::duration<double>(t_sent - t0).count();
+
+    //             std::cout << std::format("[Client] QUERY batch {}: sent {} queries\n",
+    //                                      batch_idx, this_batch);
+
+    //             std::vector<float>   distances(this_batch * k);
+    //             std::vector<int64_t> labels(this_batch * k);
+    //             recv_all(sock, distances.data(), this_batch * k * sizeof(float));
+    //             recv_all(sock, labels.data(),    this_batch * k * sizeof(int64_t));
+
+    //             auto t1 = std::chrono::high_resolution_clock::now();
+    //             double recv_time = std::chrono::duration<double>(t1 - t_sent).count();
+    //             double elapsed   = std::chrono::duration<double>(t1 - t0).count();
+    //             total_query_time += elapsed;
+
+    //             std::cout << std::format("[Client] QUERY batch {} done in {:.4f}s  "
+    //                      "[send={:.4f}s  server+recv={:.4f}s]\n",
+    //                      batch_idx, elapsed, send_time, recv_time);
+
+    //             // Print first few results
+    //             for (size_t q = 0; q < std::min(this_batch, (size_t)3); ++q) {
+    //                 std::cout << std::format("  Query {:4d}: ", queried + q);
+    //                 for (size_t i = 0; i < std::min(k, (size_t)5); ++i)
+    //                     std::cout << std::format("[id={} d={:.3f}] ",
+    //                                              labels[q*k+i], distances[q*k+i]);
+    //                 std::cout << "\n";
+    //             }
+
+    //             // Recall computation
+    //             if (have_gt) {
+    //                 float batch_recall = compute_recall(
+    //                     gt_labels, gt_k,
+    //                     labels, k,
+    //                     this_batch,
+    //                     queried  // offset into global groundtruth
+    //                 );
+    //                 recall_sum    += batch_recall;
+    //                 recall_batches += 1;
+
+    //                 std::cout << std::format("[Client] QUERY batch {} recall@{}: {:.4f}\n",
+    //                                          batch_idx, k, batch_recall);
+    //             }
+
+    //             queried += this_batch;
+    //             ++batch_idx;
+    //         }
+    //         // float mean_recall =
+    //         //     have_gt ? (recall_sum / recall_batches) : 0.0f;
+
+    //         // std::cout << std::format(
+    //         //     "[Client] nprobe={} mean recall@{}={:.4f} time={:.4f}s\n",
+    //         //     np, k, mean_recall, total_query_time
+    //         // );
+
+    //         std::cout << std::format("[Client] Loop {}: queried {} vectors in {:.4f}s total\n",
+    //                                  loop_iter + 1, total_nq, total_query_time);
+
+    //         if (have_gt && recall_batches > 0) {
+    //             float mean_recall = static_cast<float>(recall_sum / recall_batches);
+    //             std::cout << std::format("[Client] Loop {}: mean recall@{} = {:.4f}  "
+    //                                      "({} batches)\n",
+    //                                      loop_iter + 1, k, mean_recall, recall_batches);
+    //         }
+    //     }
+
         std::cout << std::format("[Client] Loading query vectors from {}...\n", query_path);
-        auto [query_data, total_nq, d] = [&]() -> std::tuple<std::vector<float>, size_t, size_t> {
-            if (query_path.ends_with(".bin"))
-                return load_spacev_single(query_path, max_nq);
-            else if (query_path.ends_with(".bvecs"))
-                return load_bvecs(query_path, max_nq);
-            else
-                return load_fvecs(query_path, max_nq);
-        }();
+        auto [query_data, total_nq, d] = query_path.ends_with(".bvecs")
+            ? load_bvecs(query_path, max_nq)
+            : load_fvecs(query_path, max_nq);
         std::cout << std::format("[Client] Loaded {} query vectors (d={})\n", total_nq, d);
 
         // Load groundtruth if provided
@@ -798,14 +1015,8 @@ int main(int argc, char** argv) {
 
                 // MasterTcpServer always reads [uint64 nq][uint64 k] with no
                 // opcode prefix — opcodes are only used in the INSERT phase.
-                uint8_t metric_id = (metric == "ip") ? METRIC_IP : METRIC_L2;
-
-                uint64_t hdr[3] = {
-                    this_batch,
-                    k,
-                    metric_id
-                };
-
+                uint64_t hdr[2] = {static_cast<uint64_t>(this_batch),
+                                   static_cast<uint64_t>(k)};
                 send_all(sock, hdr, sizeof(hdr));
                 send_all(sock, ptr, this_batch * d * sizeof(float));
 

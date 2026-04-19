@@ -14,45 +14,45 @@ resource_group:
   location: centralus
 
 cluster:
-  vm_range: "1-2"        # horizann-4 = master, horizann-5 & 6 = workers
+  vm_range: "1-12"        # horizann-4 = master, horizann-5 & 6 = workers
   num_workers: 1           
 
 # Harmony dataset / index settings — passed to `query` (server) and `harmony_client`
 experiment:
   benchmarks_path: /data/csl12/Harmony/benchmarks
-  dataset: spacev1b
-  input_format: bvecs
+  dataset: gist
+  input_format: fvecs
   group: 1
   team: 1
   block: 1
-  nprobe: 100
+  nprobe: 10
   nlist: 1000
-  mode: group                         # group | flat | etc.
-  cache: false                         # pass --cache flag to load index from disk
-  skip_insert: false                   # pass --skip_insert (requires --cache)
+  mode: group                         # group | base | etc.
+  cache: true                         # pass --cache flag to load index from disk
+  skip_insert: true                   # pass --skip_insert (requires --cache)
   k: 100
-  query_batch: 5000                   
+  query_batch: 1000                   
   query_loop: 1                       # repeat query phase N times
 
 serve:
   nb: 1000000
-  dim: 128
-  train_data: /data/anns_data/SPTAG/datasets/SPACEV1B/vectors.bin
+  dim: 960
+  train_data: "/data/anns_data/gist/gist_learn.fvecs"
 
 # Client binary settings
 client:
-  base_file: "/data/anns_data/SPTAG/datasets/SPACEV1B/vectors.bin"         # overrides experiment.benchmarks_path/dataset path if set
-  query_file: "/data/anns_data/SPTAG/datasets/SPACEV1B/query.bin"          # only needed when skip_insert: false
-  groundtruth_file: "/data/anns_data/SPTAG/datasets/SPACEV1B/truth.bin"   # overrides default groundtruth path if set
+  base_file: "/data/anns_data/gist/gist_base.fvecs"         # overrides experiment.benchmarks_path/dataset path if set
+  query_file: "/data/anns_data/gist/gist_query.fvecs"          # only needed when skip_insert: false
+  groundtruth_file: "/data/anns_data/gist/gist_groundtruth.ivecs"   # overrides default groundtruth path if set
   nq: 0                  # 0 = all queries
   nb: 1000000
-  insert_batch: 100000
-  csv_path: "~/Harmony/benchmarks/spacev1b/result/log_serve.csv"
+  insert_batch: 10000
+  csv_path: "~/Harmony/benchmarks/gist/result/log_serve.csv"
 
 # MPI launcher settings (used on master+worker nodes)
 mpi:
   hosts_file: ~/mpi_hosts             # written by start_services.py from discovered IPs
-  omp_num_threads: 1
+  omp_num_threads: 64
   mpirun_bin: /home/csl12/intel/oneapi/mpi/2021.14/bin/mpirun
   # Total mpirun -n = 1 (master rank 0) + num_workers
   # Each line in hosts_file: <ip> slots=1
@@ -85,43 +85,50 @@ nodes:
     type: worker
     slots: 1
   # - name: horizann-3
-  #   ip: 20.12.219.105
-  #   private_ip: 10.0.0.12
-  #   type: master
-  #   slots: 48
+  #   ip: 127.0.0.1 # 20.12.219.105
+  #   private_ip: 127.0.0.1 #10.0.0.12
+  #   type: worker
+  #   slots: 1
   # - name: horizann-4
-  #   ip: 20.29.78.0
-  #   private_ip: 10.0.0.13
+  #   ip: 127.0.0.1 #20.29.78.0
+  #   private_ip: 127.0.0.1 #10.0.0.13
   #   type: worker
-  #   slots: 48
+  #   slots: 1
   # - name: horizann-5
-  #   ip: 52.242.195.164
-  #   private_ip: 10.0.0.14
+  #   ip: 127.0.0.1 #52.242.195.164
+  #   private_ip: 127.0.0.1 #10.0.0.14
   #   type: worker
+  #   slots: 1
   # - name: horizann-6
-  #   ip: 52.230.187.165
-  #   private_ip: 10.0.0.15
+  #   ip: 127.0.0.1 #52.230.187.165
+  #   private_ip: 127.0.0.1 #10.0.0.15
   #   type: worker
+  #   slots: 1
   # - name: horizann-7
-  #   ip: 40.78.188.156
-  #   private_ip: 10.0.0.25
+  #   ip: 127.0.0.1 #40.78.188.156
+  #   private_ip: 127.0.0.1 #10.0.0.25
   #   type: worker
+  #   slots: 1
   # - name: horizann-8
-  #   ip: 132.196.65.49
-  #   private_ip: 10.0.0.27
+  #   ip: 127.0.0.1 #132.196.65.49
+  #   private_ip: 127.0.0.1 #10.0.0.27
   #   type: worker
+  #   slots: 1
   # - name: horizann-9
-  #   ip: 20.29.85.243
-  #   private_ip: 10.0.0.29
+  #   ip: 127.0.0.1 #20.29.85.243
+  #   private_ip: 127.0.0.1 #10.0.0.29
   #   type: worker
+  #   slots: 1
   # - name: horizann-10
-  #   ip: 20.12.201.231
-  #   private_ip: 10.0.0.16
+  #   ip: 127.0.0.1 #20.12.201.231
+  #   private_ip: 127.0.0.1 #10.0.0.16
   #   type: worker
+  #   slots: 1
   # - name: horizann-11
-  #   ip: 172.173.121.227
-  #   private_ip: 10.0.0.17
+  #   ip: 127.0.0.1 #172.173.121.227
+  #   private_ip: 127.0.0.1 #10.0.0.17
   #   type: worker
+  #   slots: 1
   # - name: horizann-12
   #   ip: 135.119.45.136
   #   private_ip: 10.0.0.18

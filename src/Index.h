@@ -80,6 +80,7 @@ class Index {
     void add(size_t n, const float* codes);
     void add_simple(size_t n, const float* codes);
     Stats search(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, float ratio = 1);
+    Stats search_multi(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, const std::vector<size_t>& nprobe_list, float ratio);
     void save_index(std::string path) const;
     void save_index(std::string path, SearchMode mode) const;
     void load_index(std::string path);

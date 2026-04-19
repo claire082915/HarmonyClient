@@ -110,6 +110,7 @@ def stop_services(server: str, ssh_key: str) -> None:
     ssh_exec(server, "pkill -f 'mpirun.*query\\|harmony_client' 2>/dev/null || true", ssh_key, timeout=15)
     ssh_exec(server, "pkill -f '/bin/query' 2>/dev/null || true", ssh_key, timeout=15)
     ssh_exec(server, "tmux kill-session -t harmony 2>/dev/null || true", ssh_key, timeout=15)
+    ssh_exec(server, "ipcs -m | awk 'NR>3 {print $2}' | xargs -r ipcrm -m 2>/dev/null || true", ssh_key, timeout=15)
     time.sleep(2)
 
 
@@ -178,7 +179,7 @@ def write_mpi_hostfile(master_server: str, nodes: List[Dict], config: Dict) -> s
 # Build server (mpirun) command
 # ---------------------------------------------------------------------------
 
-def build_server_command(config: Dict, num_ranks: int, hosts_path: str) -> str:
+def build_server_command(config: Dict, num_ranks: int, master_ip: str) -> str:
     """
     Build the mpirun command that launches `query` across master + workers.
     num_ranks = 1 (master) + num_workers
@@ -236,11 +237,16 @@ def build_server_command(config: Dict, num_ranks: int, hosts_path: str) -> str:
     )
 
     mpirun = (
-        f"{mpirun_bin} -n {num_ranks} "
-        f"-f {hosts_path} "
+        f"{mpirun_bin} -n {num_ranks} -ppn {num_ranks} "
+        # f"-f {hosts_path} "
+        f"-hosts {master_ip} "
+        f"-genv I_MPI_SHM 0 "      
+        f"-genv I_MPI_FABRICS ofi "
+        f"-genv FI_PROVIDER tcp " 
+        # f"-genv I_MPI_DEBUG 5 "              
         f"-genv LD_LIBRARY_PATH {full_ld} "
         f"-genv OMP_NUM_THREADS {omp_threads} "
-        f"/data/csl12/Harmony/release/bin/query {flags} --metric ip"
+        f"/data/csl12/Harmony/release/bin/query {flags}"
         # f"{install_dir}/release/bin/query {flags}"
     )
     log.info(f"mpirun command: {mpirun}")
@@ -365,7 +371,7 @@ def build_client_command(config: Dict, master_private_ip: str) -> str:
         flags += f" --nb {nb}"
 
     # return f"{install_dir}/release/bin/harmony_client {flags}"
-    return f"/data/csl12/Harmony/release/bin/harmony_client {flags} --metric ip"
+    return f"/data/csl12/Harmony/release/bin/harmony_client {flags}"
 
 
 # ---------------------------------------------------------------------------
@@ -388,11 +394,12 @@ def start_server(master_node: Dict, nodes: List[Dict], config: Dict, timestamp: 
     num_workers = len([n for n in nodes if n["type"] == "worker"])
     num_ranks   = 1 + num_workers
 
-    hosts_path  = write_mpi_hostfile(server, nodes, config)
+    # hosts_path  = write_mpi_hostfile(server, nodes, config)
     log_path    = remote_log_path(install_dir, "server", timestamp)
     log_dir     = remote_log_dir(install_dir)
 
-    mpirun_cmd  = build_server_command(config, num_ranks, hosts_path)
+    master_ip = next(n["private_ip"] for n in nodes if n["type"] == "master")
+    mpirun_cmd  = build_server_command(config, num_ranks, master_ip)
 
     launch = (
         f"mkdir -p {log_dir} && "
@@ -419,7 +426,7 @@ def start_server(master_node: Dict, nodes: List[Dict], config: Dict, timestamp: 
 
     # Wait until the INSERT port is actually listening (training can take minutes)
     for attempt in range(120):  # up to 10 minutes
-        time.sleep(5)
+        time.sleep(30)
         _, stdout, _ = ssh_exec(
             server,
             f"ss -tlnp | grep ':{tcp_port}' && echo PORT_OPEN || echo PORT_CLOSED",

@@ -1280,16 +1280,21 @@ void Index::search_divide_ivf(size_t n, const float* queries, size_t k, float* d
     printIndex();
     MyStopWatch watch(true);
     // The n query vectors correspond to nprobe cluster center IDs
+    cerr << "[DEBUG master] findNearNprobe start\n"; cerr.flush();
     findNearNprobeOfCentroidIds(n, queries);
     watch.print("findNearNprobeOfCentroidIds");
 
     // 3. nq, k, querys
+    cerr << "[DEBUG master] Bcast n=" << n << "\n"; cerr.flush();
     MPI_Bcast(&n, sizeof(n), MPI_BYTE, 0, MPI_COMM_WORLD);
+    cerr << "[DEBUG master] Bcast k=" << k << "\n"; cerr.flush();
     MPI_Bcast(&k, sizeof(k), MPI_BYTE, 0, MPI_COMM_WORLD);
+    cerr << "[DEBUG master] Bcast queries\n"; cerr.flush();
     MPI_Bcast(const_cast<float*>(queries), n * d, MPI_FLOAT, 0, MPI_COMM_WORLD);
     watch.print("nq,querys");
 
     // 4.listidqueries
+    cerr << "[DEBUG master] Bcast listidqueries\n"; cerr.flush();
     MPI_Bcast(listidqueries.get(), n * nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
     if (presumeK * presumeNq < n * k) {
         // distancesForNQuerys = std::make_unique<float[]>(totalQueryCompareSize);
@@ -1298,13 +1303,16 @@ void Index::search_divide_ivf(size_t n, const float* queries, size_t k, float* d
     }
 
     std::unique_ptr<float[]> heapTops = std::make_unique<float[]>(n);
+    cerr << "[DEBUG master] warmUpSearch start\n"; cerr.flush();
     warmUpSearch(n, queries, k, distances, labels, listidqueries.get());
     // watch.print("warmupSearch");
     for (size_t i = 0; i < n; i++) {
         heapTops[i] = distances[i * k];
     }
     // printVector(heapTops.get(), n, RED);
+    cerr << "[DEBUG master] Bcast heapTops\n"; cerr.flush();
     MPI_Bcast(heapTops.get(), n, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    cerr << "[DEBUG master] waiting for worker MPI_Recv\n"; cerr.flush();
 
     init_result(METRIC_L2, n * k, distances, labels);
 
@@ -1342,6 +1350,7 @@ void Index::search_divide_ivf(size_t n, const float* queries, size_t k, float* d
         sort_result(metric, k, disHeap, idHeap);
     }
     watch.print("heap");
+    cerr << "[DEBUG master] search done, labels[0]=" << labels[0] << "\n"; cerr.flush();
 
     cout << CRAN << "finish search" << RESET << endl;
 }
@@ -1704,6 +1713,60 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     }
     return Stats();
 }
+
+Stats Index::search_multi(
+    size_t n,
+    const float* queries,
+    size_t k,
+    float* distances,
+    idx_t* labels,
+    const std::vector<size_t>& nprobe_list,
+    float ratio
+) {
+    std::vector<float> best_dist(n * k);
+    std::vector<idx_t> best_labels(n * k);
+    double best_score = std::numeric_limits<double>::max();
+
+    Stats final_stats;
+
+    for (size_t np : nprobe_list) {
+        this->nprobe = np;
+
+        std::vector<float> tmp_dist(n * k);
+        std::vector<idx_t> tmp_labels(n * k);
+
+        Stats stats = this->search(
+            n,
+            queries,
+            k,
+            tmp_dist.data(),
+            tmp_labels.data(),
+            ratio
+        );
+
+        // scoring (simple: sum of distances)
+        double score = 0.0;
+        for (size_t i = 0; i < n * k; i++) {
+            score += tmp_dist[i];
+        }
+
+        if (score < best_score) {
+            best_score = score;
+            best_dist = std::move(tmp_dist);
+            best_labels = std::move(tmp_labels);
+            final_stats = stats;
+        }
+
+        std::cout << "[Index] nprobe=" << np << " done\n";
+    }
+
+    // copy best result out
+    std::memcpy(distances, best_dist.data(), n * k * sizeof(float));
+    std::memcpy(labels, best_labels.data(), n * k * sizeof(idx_t));
+
+    return final_stats;
+}
+
 
 void Index::save_index(std::string path) const {
     prepareDirectory(path);
