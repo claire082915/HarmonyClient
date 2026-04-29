@@ -263,34 +263,16 @@ int main(int argc, char* argv[]) {
                 // then hit MPI_Barrier (matching preSearch's final barrier).
                 if (searchMode == Index::SearchMode::DIVIDE_IVF) {
                     BaseWorker worker;
-                    worker.init(rank);  // handles barrier + first query's nq/k/queries/listids/heapTops
-                    cerr << "[DEBUG worker] startIVFId=" << worker.info.startIVFId 
-                        << " ivfCount=" << worker.info.ivfCount
-                        << " nlist=" << worker.info.nlist
-                        << " nprobe=" << worker.info.nprobe << "\n"; cerr.flush();
-                    cerr << "[DEBUG worker] first listid=" << worker.listidqueries.get()[0] 
-                        << " second=" << worker.listidqueries.get()[1] << "\n"; cerr.flush();
-                    cerr << "[DEBUG worker] init done, nq=" << worker.nq << " k=" << worker.k << "\n"; cerr.flush();
-                    cerr << "[DEBUG worker] first query[0]=" << worker.querys.get()[0] << "\n"; cerr.flush();
-                    // First search uses data already received by init()
-                    worker.search(pruning);
-                    cerr << "[DEBUG worker] search done, labels[0]=" << worker.labels.get()[0] << "\n"; cerr.flush();
+                    worker.init(rank);
+                    MPI_Barrier(MPI_COMM_WORLD);  // matches preSearch() final barrier
 
-                    // Subsequent queries
                     while (true) {
                         int signal = WORKER_SIGNAL_SHUTDOWN;
                         MPI_Bcast(&signal, 1, MPI_INT, 0, MPI_COMM_WORLD);
-                        cerr << "[DEBUG worker] signal=" << signal << "\n"; cerr.flush();
                         if (signal == WORKER_SIGNAL_SHUTDOWN) break;
 
-                        size_t nq = 0, k = 0;
-                        MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
-                        MPI_Bcast(&k,  sizeof(k),  MPI_BYTE, 0, MPI_COMM_WORLD);
-                        worker.nq = nq;
-                        worker.k  = k;
-                        MPI_Bcast(worker.querys.get(),         nq * worker.info.d,      MPI_FLOAT,   0, MPI_COMM_WORLD);
-                        MPI_Bcast(worker.listidqueries.get(),   nq * worker.info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
-                        MPI_Bcast(worker.heapTops.get(),        nq,                      MPI_FLOAT,   0, MPI_COMM_WORLD);
+                        MPI_Barrier(MPI_COMM_WORLD);  // matches master's barrier at line 874
+                        worker.receiveQuery();
                         worker.search(pruning);
                     }
                 } else if (searchMode == Index::SearchMode::DIVIDE_GROUP) {

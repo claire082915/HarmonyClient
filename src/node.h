@@ -438,6 +438,7 @@ public:
     void single_thread_search_fast(size_t n, const float* queries, size_t k, float* distances, idx_t* labels, idx_t* listidqueries);
     
     void search(bool cut);
+    void receiveQuery();
 
     
 };

@@ -1073,7 +1073,7 @@ int main(int argc, char** argv) {
 
             if (have_gt && recall_batches > 0) {
                 float mean_recall = static_cast<float>(recall_sum / recall_batches);
-                std::cout << std::format("[Client] Loop {}: mean recall@{} = {:.4f}  "
+                std::cout << std::format("[Client] Loop {}: mean recall@{} = {}  "
                                          "({} batches)\n",
                                          loop_iter + 1, k, mean_recall, recall_batches);
             }

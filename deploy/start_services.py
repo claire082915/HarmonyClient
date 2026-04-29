@@ -433,10 +433,10 @@ def start_server(master_node: Dict, nodes: List[Dict], config: Dict, timestamp: 
             ssh_key, timeout=10,
         )
         if "PORT_OPEN" in stdout:
-            log.info(f"[{server}] ✓ Server is listening on port {tcp_port} (after {(attempt+1)*5}s)")
+            log.info(f"[{server}] ✓ Server is listening on port {tcp_port} (after {(attempt+1)*30}s)")
             return True
         if attempt % 6 == 0:  # log every 30s
-            log.info(f"[{server}] Still waiting for port {tcp_port}... ({(attempt+1)*5}s elapsed)")
+            log.info(f"[{server}] Still waiting for port {tcp_port}... ({(attempt+1)*30}s elapsed)")
 
     log.error(f"[{server}] ✗ Server never opened port {tcp_port} after 10 minutes")
     return False

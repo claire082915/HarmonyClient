@@ -494,53 +494,75 @@ void BaseWorker::init(int rank) {
         MPI_Bcast(index->centroid_codes.get(), info.nlist * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
         MPI_Bcast(index->centroid_ids.get(), info.nlist , MPI_INT64_T, 0, MPI_COMM_WORLD);
 
-        // int presumeNq = 1000;
-        int presumeK = 100;
-        this->querys = std::make_unique<float[]>(presumeNq * info.d);
-        listidqueries = std::make_unique<idx_t[]>(presumeNq * info.nprobe);  
-        // queryCompareSize = std::make_unique<size_t[]>(presumeNq);
-        // queryCompareSizePreSum = std::make_unique<size_t[]>(presumeNq + 1);
+        // // int presumeNq = 1000;
+        // int presumeK = 100;
+        // this->querys = std::make_unique<float[]>(presumeNq * info.d);
+        // listidqueries = std::make_unique<idx_t[]>(presumeNq * info.nprobe);  
+        // // queryCompareSize = std::make_unique<size_t[]>(presumeNq);
+        // // queryCompareSizePreSum = std::make_unique<size_t[]>(presumeNq + 1);
 
-        distances = std::make_unique<float[]>(presumeNq * presumeK);
-        labels = std::make_unique<idx_t[]>(presumeNq * presumeK);
-        init_result(METRIC_L2, presumeNq * presumeK, distances.get(), labels.get());
+        // distances = std::make_unique<float[]>(presumeNq * presumeK);
+        // labels = std::make_unique<idx_t[]>(presumeNq * presumeK);
+        // init_result(METRIC_L2, presumeNq * presumeK, distances.get(), labels.get());
 
-        MPI_Barrier(MPI_COMM_WORLD);  // Corresponding to the barrier in preSearch
+        // cerr << "[DEBUG worker init] about to hit MPI_Barrier\n"; cerr.flush();
+        // MPI_Barrier(MPI_COMM_WORLD);  // Corresponding to the barrier in preSearch
 
-        uniWatch = MyStopWatch(true, "uniWatch", MAG);
-        uniWatch.print(format("node {} cross barrier", rank), false);
+        // uniWatch = MyStopWatch(true, "uniWatch", MAG);
+        // uniWatch.print(format("node {} cross barrier", rank), false);
 
-        // nq, k, querys
-        MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&k, sizeof(k), MPI_BYTE, 0, MPI_COMM_WORLD);
-        if(nq * k > presumeK * presumeNq) {
-            cerr << "presumeNq is too small" << endl;
-            exit(1);
-        }
-        uniWatch.print(format("node {} nq", rank), false);
-        MPI_Bcast(querys.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
-        uniWatch.print(format("node {} querys", rank), false);
+        // // nq, k, querys
+        // cerr << "[DEBUG worker init] past barrier, receiving nq\n"; cerr.flush();
+        // MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
+        // cerr << "[DEBUG worker init] nq=" << nq << " receiving k\n"; cerr.flush();
+        // MPI_Bcast(&k, sizeof(k), MPI_BYTE, 0, MPI_COMM_WORLD);
+        // cerr << "[DEBUG worker init] k=" << k << "\n"; cerr.flush();
+        // if(nq * k > presumeK * presumeNq) {
+        //     cerr << "presumeNq is too small" << endl;
+        //     exit(1);
+        // }
+        // uniWatch.print(format("node {} nq", rank), false);
+        // MPI_Bcast(querys.get(), nq * info.d, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        // uniWatch.print(format("node {} querys", rank), false);
 
-        // IDs of the nearest nprobe clusters for the queries
-        MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
-        uniWatch.print(format("node {} listidqueries", rank), false);
+        // // IDs of the nearest nprobe clusters for the queries
+        // MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // uniWatch.print(format("node {} listidqueries", rank), false);
 
-        heapTops = std::make_unique<float[]>(presumeNq);
-        MPI_Bcast(heapTops.get(), nq, MPI_FLOAT, 0, MPI_COMM_WORLD);
-        uniWatch.print(format("node {} heapTops", rank), false);
+        // heapTops = std::make_unique<float[]>(presumeNq);
+        // MPI_Bcast(heapTops.get(), nq, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        // uniWatch.print(format("node {} heapTops", rank), false);
 
-        // queryCompareSize,queryCompareSizePreSum
-        // queryCompareSize = std::make_unique<size_t[]>(nq);
-        // MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
-        // MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
-        // uniWatch.print(format("node {} queryCompareSize", rank), false);
+        // // queryCompareSize,queryCompareSizePreSum
+        // // queryCompareSize = std::make_unique<size_t[]>(nq);
+        // // MPI_Bcast(queryCompareSize.get(), nq, MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // // MPI_Bcast(queryCompareSizePreSum.get(), (nq + 1), MPI_INT64_T, 0, MPI_COMM_WORLD);
+        // // uniWatch.print(format("node {} queryCompareSize", rank), false);
 
-        // Max heap
+        // // Max heap
 
-        watch.print(format("Node {} Init", rank));
-        uniWatch.print(format("node {} finish init", rank), false);
+        // watch.print(format("Node {} Init", rank));
+        // uniWatch.print(format("node {} finish init", rank), false);
 
     }
+
+void BaseWorker::receiveQuery() {
+    int presumeNq = 10000, presumeK = 100;
+    MPI_Bcast(&nq, sizeof(nq), MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&k,  sizeof(k),  MPI_BYTE, 0, MPI_COMM_WORLD);
+    if (nq * k > presumeNq * presumeK) {
+        cerr << "presumeNq is too small" << endl; exit(1);
+    }
+    querys        = std::make_unique<float[]>(nq * info.d);
+    listidqueries = std::make_unique<idx_t[]>(nq * info.nprobe);
+    heapTops      = std::make_unique<float[]>(nq);
+    distances     = std::make_unique<float[]>(nq * k);
+    labels        = std::make_unique<idx_t[]>(nq * k);
+    init_result(METRIC_L2, nq * k, distances.get(), labels.get());
+    MPI_Bcast(querys.get(),        nq * info.d,      MPI_FLOAT,   0, MPI_COMM_WORLD);
+    MPI_Bcast(listidqueries.get(), nq * info.nprobe, MPI_INT64_T, 0, MPI_COMM_WORLD);
+    MPI_Bcast(heapTops.get(),      nq,               MPI_FLOAT,   0, MPI_COMM_WORLD);
+}
 
 void BaseWorker::search(bool cut) {
     this->cut = cut;
@@ -735,7 +757,39 @@ void GroupWorker::init(int rank, bool blockSend) {
     }
     
     // blockDistancesSize = presumeNq / info.blockCount / info.groupCount * (info.nb / info.nlist) * info.nprobe * 2;
-    blockDistancesSize = 2 * presumeNq / info.blockCount / info.groupCount * info.nb * info.nprobe / info.nlist;
+    // blockDistancesSize = 2 * presumeNq / info.blockCount / info.groupCount * info.nb * info.nprobe / info.nlist;
+    // blockDistancesSize =
+    //     2 * (info.nb / info.nlist) * info.nprobe;
+    vector<size_t> localSizes(
+    listSizes.get() + info.startIVFId,
+    listSizes.get() + info.startIVFId + info.ivfCount);
+
+    std::sort(localSizes.begin(), localSizes.end());
+
+    size_t p99 = localSizes[(size_t)(0.99 * localSizes.size())];
+
+    size_t avgQueriesPerBlock =
+    presumeNq / info.blockCount / info.groupCount;
+
+    size_t safeListSize = p99;   // or localMaxList with cap
+
+    blockDistancesSize =
+        1.3 *
+        avgQueriesPerBlock *
+        info.nprobe *
+        safeListSize *
+        info.d;
+
+    blockDistancesSize = std::min(blockDistancesSize,
+                              (size_t)2e9); // ~2GB cap per buffer
+
+
+    std::cout << "blockDistancesSize=" << blockDistancesSize << std::endl;
+    std::cout << "EXPECTED MB per buffer = "
+          << blockDistancesSize * sizeof(float) / 1e6
+          << std::endl;
+    std::cout << "blockCount * groupCount = " << info.blockCount * info.groupCount << std::endl;
+
     // blockDistancesSize = 2 * presumeNq / info.blockCount / info.groupCount * info.nb / info.teamSize * info.nprobe / info.nlist;
     distancesForBlocks = vector<vector<std::unique_ptr<float[]>>>(info.groupCount);
     for (size_t i = 0; i < distancesForBlocks.size(); i++) {

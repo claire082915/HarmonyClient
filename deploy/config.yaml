@@ -14,40 +14,40 @@ resource_group:
   location: centralus
 
 cluster:
-  vm_range: "1-12"        # horizann-4 = master, horizann-5 & 6 = workers
-  num_workers: 1           
+  vm_range: "1-11"        # horizann-4 = master, horizann-5 & 6 = workers
+  num_workers: 10          
 
 # Harmony dataset / index settings — passed to `query` (server) and `harmony_client`
 experiment:
   benchmarks_path: /data/csl12/Harmony/benchmarks
-  dataset: gist
-  input_format: fvecs
-  group: 1
-  team: 1
-  block: 1
-  nprobe: 10
-  nlist: 1000
-  mode: group                         # group | base | etc.
+  dataset: sift10m
+  input_format: bvecs
+  group: 2
+  team: 2
+  block: 4
+  nprobe: 100
+  nlist: 3162
+  mode: base                         # group | base | etc.
   cache: true                         # pass --cache flag to load index from disk
   skip_insert: true                   # pass --skip_insert (requires --cache)
   k: 100
-  query_batch: 1000                   
+  query_batch: 5000                   
   query_loop: 1                       # repeat query phase N times
 
 serve:
-  nb: 1000000
-  dim: 960
-  train_data: "/data/anns_data/gist/gist_learn.fvecs"
+  nb: 10000000
+  dim: 128
+  train_data: "/data/csl12/Harmony/benchmarks/sift1m/origin/sift1m_base.fvecs"
 
 # Client binary settings
 client:
-  base_file: "/data/anns_data/gist/gist_base.fvecs"         # overrides experiment.benchmarks_path/dataset path if set
-  query_file: "/data/anns_data/gist/gist_query.fvecs"          # only needed when skip_insert: false
-  groundtruth_file: "/data/anns_data/gist/gist_groundtruth.ivecs"   # overrides default groundtruth path if set
+  base_file: "/data/csl12/Harmony/benchmarks/sift1b/origin/sift1b_base.bvecs"         # overrides experiment.benchmarks_path/dataset path if set
+  query_file: "/data/csl12/Harmony/benchmarks/sift1b/origin/sift1b_query.bvecs"          # only needed when skip_insert: false
+  groundtruth_file: "/data/csl12/Harmony/benchmarks/sift1b/origin/gnd/idx_10M.ivecs"   # overrides default groundtruth path if set
   nq: 0                  # 0 = all queries
-  nb: 1000000
-  insert_batch: 10000
-  csv_path: "~/Harmony/benchmarks/gist/result/log_serve.csv"
+  nb: 10000000
+  insert_batch: 100000
+  csv_path: "~/Harmony/benchmarks/sift10m/result/log_serve.csv"
 
 # MPI launcher settings (used on master+worker nodes)
 mpi:
@@ -84,51 +84,51 @@ nodes:
     private_ip: 127.0.0.1 #10.0.0.11
     type: worker
     slots: 1
-  # - name: horizann-3
-  #   ip: 127.0.0.1 # 20.12.219.105
-  #   private_ip: 127.0.0.1 #10.0.0.12
-  #   type: worker
-  #   slots: 1
-  # - name: horizann-4
-  #   ip: 127.0.0.1 #20.29.78.0
-  #   private_ip: 127.0.0.1 #10.0.0.13
-  #   type: worker
-  #   slots: 1
-  # - name: horizann-5
-  #   ip: 127.0.0.1 #52.242.195.164
-  #   private_ip: 127.0.0.1 #10.0.0.14
-  #   type: worker
-  #   slots: 1
-  # - name: horizann-6
-  #   ip: 127.0.0.1 #52.230.187.165
-  #   private_ip: 127.0.0.1 #10.0.0.15
-  #   type: worker
-  #   slots: 1
-  # - name: horizann-7
-  #   ip: 127.0.0.1 #40.78.188.156
-  #   private_ip: 127.0.0.1 #10.0.0.25
-  #   type: worker
-  #   slots: 1
-  # - name: horizann-8
-  #   ip: 127.0.0.1 #132.196.65.49
-  #   private_ip: 127.0.0.1 #10.0.0.27
-  #   type: worker
-  #   slots: 1
-  # - name: horizann-9
-  #   ip: 127.0.0.1 #20.29.85.243
-  #   private_ip: 127.0.0.1 #10.0.0.29
-  #   type: worker
-  #   slots: 1
-  # - name: horizann-10
-  #   ip: 127.0.0.1 #20.12.201.231
-  #   private_ip: 127.0.0.1 #10.0.0.16
-  #   type: worker
-  #   slots: 1
-  # - name: horizann-11
-  #   ip: 127.0.0.1 #172.173.121.227
-  #   private_ip: 127.0.0.1 #10.0.0.17
-  #   type: worker
-  #   slots: 1
+  - name: horizann-3
+    ip: 127.0.0.1 # 20.12.219.105
+    private_ip: 127.0.0.1 #10.0.0.12
+    type: worker
+    slots: 1
+  - name: horizann-4
+    ip: 127.0.0.1 #20.29.78.0
+    private_ip: 127.0.0.1 #10.0.0.13
+    type: worker
+    slots: 1
+  - name: horizann-5
+    ip: 127.0.0.1 #52.242.195.164
+    private_ip: 127.0.0.1 #10.0.0.14
+    type: worker
+    slots: 1
+  - name: horizann-6
+    ip: 127.0.0.1 #52.230.187.165
+    private_ip: 127.0.0.1 #10.0.0.15
+    type: worker
+    slots: 1
+  - name: horizann-7
+    ip: 127.0.0.1 #40.78.188.156
+    private_ip: 127.0.0.1 #10.0.0.25
+    type: worker
+    slots: 1
+  - name: horizann-8
+    ip: 127.0.0.1 #132.196.65.49
+    private_ip: 127.0.0.1 #10.0.0.27
+    type: worker
+    slots: 1
+  - name: horizann-9
+    ip: 127.0.0.1 #20.29.85.243
+    private_ip: 127.0.0.1 #10.0.0.29
+    type: worker
+    slots: 1
+  - name: horizann-10
+    ip: 127.0.0.1 #20.12.201.231
+    private_ip: 127.0.0.1 #10.0.0.16
+    type: worker
+    slots: 1
+  - name: horizann-11
+    ip: 127.0.0.1 #172.173.121.227
+    private_ip: 127.0.0.1 #10.0.0.17
+    type: worker
+    slots: 1
   # - name: horizann-12
   #   ip: 135.119.45.136
   #   private_ip: 10.0.0.18

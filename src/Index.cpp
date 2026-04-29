@@ -306,23 +306,34 @@ void Index::preSearch(size_t nb, size_t workerCount, size_t blockCount, size_t w
                 //     sizeof(size_t));
             }
 
-            auto listCodesBuffer = vector<std::unique_ptr<float[]>>(info.nlist);
-            for (size_t i = beginIVF; i < beginIVF + ivfCount; i++) {
-                listCodesBuffer[i] = std::make_unique<float[]>(listSizes[i] * info.block_dim);
-            }
+            // auto listCodesBuffer = vector<std::unique_ptr<float[]>>(info.nlist);
+            // for (size_t i = beginIVF; i < beginIVF + ivfCount; i++) {
+            //     listCodesBuffer[i] = std::make_unique<float[]>(listSizes[i] * info.block_dim);
+            // }
+            // for (size_t listId = beginIVF; listId < beginIVF + ivfCount; listId++) {
+            //     IVF& list = lists[listId];
+            //     copy_n_partial_vector(list.candidate_codes.get(), listCodesBuffer[listId].get(), info.d, info.block_dim,
+            //                           (rankInSideTeam - 1) * info.block_dim, list.get_list_size());
+            //     // MPI_Send(listCodesBuffer[listId].get(), list.get_list_size() * info.block_dim, MPI_FLOAT, rank, 0,
+            //     // MPI_COMM_WORLD); if(rank == 1)
+            //     //     out.write(reinterpret_cast<const char*>(listCodesBuffer[listId].get()), list.get_list_size() *
+            //     //     info.block_dim * sizeof(float));
+            // }
+            double totalMB = 0;
             for (size_t listId = beginIVF; listId < beginIVF + ivfCount; listId++) {
                 IVF& list = lists[listId];
-                copy_n_partial_vector(list.candidate_codes.get(), listCodesBuffer[listId].get(), info.d, info.block_dim,
-                                      (rankInSideTeam - 1) * info.block_dim, list.get_list_size());
-                // MPI_Send(listCodesBuffer[listId].get(), list.get_list_size() * info.block_dim, MPI_FLOAT, rank, 0,
-                // MPI_COMM_WORLD); if(rank == 1)
-                //     out.write(reinterpret_cast<const char*>(listCodesBuffer[listId].get()), list.get_list_size() *
-                //     info.block_dim * sizeof(float));
-            }
-            for (size_t listId = beginIVF; listId < beginIVF + ivfCount; listId++) {
-                IVF& list = lists[listId];
+
+                // size_t vecs = list.get_list_size();
+                // size_t bytes = vecs * d * sizeof(float);
+                // cout << "[CHECK FIX] sendingMB="
+                //     << (list.get_list_size() * info.block_dim * sizeof(float)) / 1e6
+                //     << endl;
+                size_t vecs = lists[listId].get_list_size();
+                totalMB += vecs * d * sizeof(float) / 1024.0 / 1024.0;
                 MPI_Send(list.candidate_codes.get(), list.get_list_size() * d, MPI_FLOAT, rank, 0, MPI_COMM_WORLD);
             }
+            std::cout << "[DEBUG TOTAL SEND] rank=" << rank 
+            << " totalMB=" << totalMB << std::endl;
         }
     }
     MPI_Barrier(MPI_COMM_WORLD);
